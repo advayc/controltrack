@@ -17,6 +17,7 @@ struct Archive: Codable {
     var groupNames: [String]? = nil
     var importedGroupFiles: [String]? = nil
     var groupColors: [String: Int]? = nil
+    var customColors: [String: String]? = nil
 }
 struct BlockState { var running: Bool; var end: Date? }
 struct TrackerCommand: Decodable { var type: String; var id: UUID?; var name: String; var oldName: String?; var response: Bool?; var colorIndex: Int? }
@@ -63,6 +64,7 @@ final class Store: ObservableObject {
     @Published var nextName = ""
     @Published var storedGroups: [String] = []
     @Published var groupColors: [String: Int] = [:]
+    @Published var customColors: [String: String] = [:]
     private var importedGroupFiles: Set<String> = []
     @Published var status = "Connecting to SelfControl…"
     @Published var running = false
@@ -82,6 +84,7 @@ final class Store: ObservableObject {
                 sessions = archive.sessions; nextName = archive.nextName
                 storedGroups = archive.groupNames ?? []
                 groupColors = archive.groupColors ?? [:]
+                customColors = archive.customColors ?? [:]
                 importedGroupFiles = Set(archive.importedGroupFiles ?? [])
             } catch {
                 archiveHealthy = false
@@ -102,7 +105,7 @@ final class Store: ObservableObject {
         guard archiveHealthy else { return false }
         do {
             try FileManager.default.createDirectory(at: archiveURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(Archive(sessions: sessions, nextName: nextName, groupNames: storedGroups, importedGroupFiles: importedGroupFiles.sorted(), groupColors: groupColors))
+            let data = try JSONEncoder().encode(Archive(sessions: sessions, nextName: nextName, groupNames: storedGroups, importedGroupFiles: importedGroupFiles.sorted(), groupColors: groupColors, customColors: customColors))
             try data.write(to: archiveURL, options: .atomic)
             return true
         } catch { readError = "Could not save session history: \(error.localizedDescription)"; return false }
@@ -181,13 +184,15 @@ final class Store: ObservableObject {
         let previousSessions = sessions
         let previousNextName = nextName
         let previousColors = groupColors
+        let previousCustomColors = customColors
+        if let key = customColors.keys.first(where: { sameGroup($0, oldName) }), let color = customColors.removeValue(forKey: key) { customColors[newName] = color }
         if let key = groupColors.keys.first(where: { sameGroup($0, oldName) }), let color = groupColors.removeValue(forKey: key) { groupColors[newName] = color }
         storedGroups.removeAll { sameGroup($0, oldName) }
         storedGroups.append(newName)
         for index in sessions.indices where sameGroup(sessions[index].name, oldName) { sessions[index].name = newName }
         if sameGroup(nextName, oldName) { nextName = newName }
         if !save() {
-            storedGroups = previousGroups; sessions = previousSessions; nextName = previousNextName; groupColors = previousColors
+            storedGroups = previousGroups; sessions = previousSessions; nextName = previousNextName; groupColors = previousColors; customColors = previousCustomColors
             throw groupError("Could not save the group. Try again.")
         }
     }
@@ -196,12 +201,28 @@ final class Store: ObservableObject {
         if let key = groupColors.keys.first(where: { sameGroup($0, name) }), let index = groupColors[key], (0..<Self.palette.count).contains(index) { return index }
         return name.lowercased().utf8.reduce(0) { ($0 + Int($1)) % Self.palette.count }
     }
+    func displayColor(_ name: String) -> Color {
+        if let key = customColors.keys.first(where: { sameGroup($0, name) }), let hex = customColors[key], let value = UInt(hex, radix: 16) {
+            return Color(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
+        }
+        return Self.palette[colorIndex(name)]
+    }
+    func setCustomColor(_ name: String, color: Color) throws {
+        guard let value = NSColor(color).usingColorSpace(.sRGB) else { throw groupError("Could not use that color.") }
+        let hex = String(format: "%02X%02X%02X", Int((value.redComponent * 255).rounded()), Int((value.greenComponent * 255).rounded()), Int((value.blueComponent * 255).rounded()))
+        let previous = customColors
+        if let key = customColors.keys.first(where: { sameGroup($0, name) }) { customColors.removeValue(forKey: key) }
+        customColors[name] = hex
+        if !save() { customColors = previous; throw groupError("Could not save the color.") }
+    }
     func setColor(_ name: String, index: Int) throws {
         guard (0..<Self.palette.count).contains(index) else { throw groupError("Choose a color.") }
         let previous = groupColors
+        let previousCustom = customColors
+        if let key = customColors.keys.first(where: { sameGroup($0, name) }) { customColors.removeValue(forKey: key) }
         if let key = groupColors.keys.first(where: { sameGroup($0, name) }) { groupColors.removeValue(forKey: key) }
         groupColors[name] = index
-        if !save() { groupColors = previous; throw groupError("Could not save the color.") }
+        if !save() { groupColors = previous; customColors = previousCustom; throw groupError("Could not save the color.") }
     }
     func deleteGroup(_ input: String) throws {
         let name = try validatedGroupName(input)
@@ -331,19 +352,19 @@ struct GroupEditor: View {
     let original: String?
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
-    @State private var colorIndex: Int
+    @State private var selectedColor: Color
     @State private var error: String?
     init(store: Store, original: String?) {
         self.store = store
         self.original = original
         _name = State(initialValue: original ?? "")
-        _colorIndex = State(initialValue: original.map { store.colorIndex($0) } ?? 0)
+        _selectedColor = State(initialValue: original.map { store.displayColor($0) } ?? .blue)
     }
     private func save() {
         do {
             if let original { try store.renameGroup(original, to: name) }
             else { try store.addGroup(name) }
-            try store.setColor(name.trimmingCharacters(in: .whitespacesAndNewlines), index: colorIndex)
+            try store.setCustomColor(name.trimmingCharacters(in: .whitespacesAndNewlines), color: selectedColor)
             dismiss()
         } catch { self.error = error.localizedDescription }
     }
@@ -351,11 +372,7 @@ struct GroupEditor: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(original == nil ? "New Group" : "Rename Group").font(.headline)
             TextField("Subject or group", text: $name).onSubmit(save)
-            Picker("Color", selection: $colorIndex) {
-                ForEach(0..<Store.palette.count, id: \.self) { index in
-                    Text(["Blue", "Green", "Orange", "Purple", "Pink", "Teal"][index]).tag(index)
-                }
-            }
+            ColorPicker("Color", selection: $selectedColor, supportsOpacity: false)
             if let error { Text(error).font(.caption).foregroundColor(.red) }
             HStack {
                 Spacer()
@@ -429,7 +446,7 @@ struct Dashboard: View {
                     ScrollView {
                         VStack(spacing: 0) {
                             ForEach(store.groups(), id: \.self) { name in
-                                GroupActions(name: name, duration: nil, color: Store.palette[store.colorIndex(name)], rename: { groupEditor = GroupEditorRequest(original: name) }, remove: { deleteGroup(name) })
+                                GroupActions(name: name, duration: nil, color: store.displayColor(name), rename: { groupEditor = GroupEditorRequest(original: name) }, remove: { deleteGroup(name) })
                                 Divider()
                             }
                         }
@@ -457,7 +474,7 @@ struct Dashboard: View {
                                         let stop = session.actualEnd ?? min(now, session.plannedEnd)
                                         return sum + max(0, min(end, stop).timeIntervalSince(max(start, session.start)))
                                     }
-                                    if seconds > 0 { Rectangle().fill(sameGroup(group, "Focus session") ? Color.secondary : Store.palette[store.colorIndex(group)]).frame(height: CGFloat(seconds / maximum) * 52) }
+                                    if seconds > 0 { Rectangle().fill(sameGroup(group, "Focus session") ? Color.secondary : store.displayColor(group)).frame(height: CGFloat(seconds / maximum) * 52) }
                                 }
                             }.frame(height: max(3, CGFloat(values[index] / maximum) * 52), alignment: .bottom)
                              .background(Color.secondary.opacity(values[index] == 0 ? 0.15 : 0))
@@ -472,8 +489,22 @@ struct Dashboard: View {
                         .animation(.easeOut(duration: 0.15), value: inspectedDay)
                     }
                 }.frame(height: 85, alignment: .bottom)
-                Text(inspectedDay.map { $0.formatted(date: .abbreviated, time: .omitted) + " · " + durationText(store.focus(in: $0, now: now)) } ?? "Hover over a day for details")
-                    .font(.caption).foregroundColor(.secondary).frame(height: 12)
+                if let day = inspectedDay {
+                    let start = Calendar.current.startOfDay(for: day)
+                    let end = Calendar.current.date(byAdding: .day, value: 1, to: start)!
+                    let names = store.groups() + ["Focus session"]
+                    let breakdown = names.compactMap { name -> String? in
+                        let seconds = store.sessions.filter { sameGroup($0.name, name) }.reduce(0.0) { sum, session in
+                            let stop = session.actualEnd ?? min(now, session.plannedEnd)
+                            return sum + max(0, min(end, stop).timeIntervalSince(max(start, session.start)))
+                        }
+                        return seconds > 0 ? name + ": " + durationText(seconds) : nil
+                    }
+                    Text(day.formatted(date: .abbreviated, time: .omitted) + (breakdown.isEmpty ? " · 0m" : " · " + breakdown.joined(separator: "  ·  ")))
+                        .font(.caption).foregroundColor(.secondary).lineLimit(3)
+                } else {
+                    Text("Hover over a day for details").font(.caption).foregroundColor(.secondary)
+                }
                 if store.sessions.isEmpty {
                     Spacer(); Text("No sessions yet").foregroundColor(.secondary); Spacer()
                 } else {
@@ -482,7 +513,7 @@ struct Dashboard: View {
                             HStack { Text("Subjects / Groups").fontWeight(.semibold); Spacer() }.padding(.vertical, 8)
                             ForEach(groupTotals, id: \.name) { group in
                                 if !sameGroup(group.name, "Focus session") {
-                                    GroupActions(name: group.name, duration: durationText(group.seconds), color: Store.palette[store.colorIndex(group.name)], rename: { groupEditor = GroupEditorRequest(original: group.name) }, remove: { deleteGroup(group.name) })
+                                    GroupActions(name: group.name, duration: durationText(group.seconds), color: store.displayColor(group.name), rename: { groupEditor = GroupEditorRequest(original: group.name) }, remove: { deleteGroup(group.name) })
                                 } else {
                                     HStack { Text(group.name); Spacer(); Text(durationText(group.seconds)).foregroundColor(.secondary) }.padding(.vertical, 5)
                                 }
