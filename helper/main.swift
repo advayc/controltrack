@@ -374,7 +374,10 @@ struct ChartSegment: View {
     @Binding var inspectedDay: Date?
     @Binding var inspectedGroup: String?
     var body: some View {
-        Rectangle().fill(color)
+        ZStack(alignment: .leading) {
+            Rectangle().fill(color.opacity(0.32))
+            Rectangle().fill(color).frame(width: 3)
+        }
             .brightness(sessionHovered ? -0.16 : 0)
             .opacity(inspectedDay == day && inspectedGroup == group ? 0.7 : 1)
             .frame(height: CGFloat(seconds / maximum) * 52)
