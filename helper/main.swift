@@ -91,7 +91,9 @@ final class Store: ObservableObject {
     }
     func startMonitoring() {
         poll()
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.poll() }
+        let monitor = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
+        RunLoop.main.add(monitor, forMode: .common)
+        timer = monitor
     }
     @discardableResult func save() -> Bool {
         guard archiveHealthy else { return false }
@@ -184,6 +186,18 @@ final class Store: ObservableObject {
             throw groupError("Could not save the group. Try again.")
         }
     }
+    func deleteGroup(_ input: String) throws {
+        let name = try validatedGroupName(input)
+        guard groups().contains(where: { sameGroup($0, name) }) else { throw groupError("That group no longer exists.") }
+        let previousGroups = storedGroups, previousSessions = sessions, previousNextName = nextName
+        storedGroups.removeAll { sameGroup($0, name) }
+        for index in sessions.indices where sameGroup(sessions[index].name, name) { sessions[index].name = "Focus session" }
+        if sameGroup(nextName, name) { nextName = "" }
+        if !save() {
+            storedGroups = previousGroups; sessions = previousSessions; nextName = previousNextName
+            throw groupError("Could not delete the group. Try again.")
+        }
+    }
     var commandDirectory: URL { archiveURL.deletingLastPathComponent().appendingPathComponent("commands", isDirectory: true) }
     func processCommands() {
         let urls = (try? FileManager.default.contentsOfDirectory(at: commandDirectory, includingPropertiesForKeys: nil)) ?? []
@@ -200,6 +214,8 @@ final class Store: ObservableObject {
                     let previous = sessions[i].name
                     sessions[i].name = canonical
                     if !save() { sessions[i].name = previous; throw groupError("Could not save the session. Try again.") }
+                case "deleteGroup":
+                    try deleteGroup(command.name)
                 case "addGroup":
                     try addGroup(command.name)
                 case "renameGroup":
@@ -274,6 +290,8 @@ struct Dashboard: View {
     @State private var now = Date()
     @State private var showGroups = false
     @State private var groupEditor: GroupEditorRequest?
+    @State private var sessionsExpanded = false
+    @State private var statisticsHovered = false
     let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     var remaining: TimeInterval? { store.sessions.first(where: { $0.actualEnd == nil }).map { max(0, $0.plannedEnd.timeIntervalSince(now)) } }
     var statusColor: Color {
@@ -296,6 +314,17 @@ struct Dashboard: View {
         }
         return sums.sorted { $0.seconds > $1.seconds }
     }
+    private func deleteGroup(_ name: String) {
+        let alert = NSAlert()
+        alert.messageText = "Delete this group?"
+        alert.informativeText = "Its sessions will stay in your history without a subject."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            do { try store.deleteGroup(name) }
+            catch { let errorAlert = NSAlert(error: error); errorAlert.runModal() }
+        }
+    }
     var body: some View {
         VStack(spacing: 16) {
             if showGroups {
@@ -316,6 +345,7 @@ struct Dashboard: View {
                                     Text(name)
                                     Spacer()
                                     Button("Rename") { groupEditor = GroupEditorRequest(original: name) }.controlSize(.small)
+                                    Button("Delete") { deleteGroup(name) }.controlSize(.small)
                                 }.padding(.vertical, 8)
                                 Divider()
                             }
@@ -358,7 +388,7 @@ struct Dashboard: View {
                                 }.padding(.vertical, 5)
                             }
                             Divider().padding(.vertical, 8)
-                            HStack { Text("Sessions").fontWeight(.semibold); Spacer() }.padding(.vertical, 4)
+                            DisclosureGroup("Sessions (\(store.sessions.count))", isExpanded: $sessionsExpanded) {
                             ForEach(store.sessions) { s in
                                 HStack {
                                     VStack(alignment: .leading, spacing: 3) {
@@ -370,6 +400,7 @@ struct Dashboard: View {
                                 }.padding(.vertical, 8)
                                 Divider()
                             }
+                            }.padding(.vertical, 4)
                         }
                     }
                 }
@@ -393,10 +424,18 @@ struct Dashboard: View {
                     Button("Open SelfControl") { NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: NSHomeDirectory() + "/Applications/SelfControl.app"), configuration: NSWorkspace.OpenConfiguration()) }
                     Button("Groups") { showGroups = true }
                     Button("View Statistics") { showHistory = true }
+                        .tint(statisticsHovered ? .accentColor : nil)
+                        .scaleEffect(statisticsHovered ? 1.03 : 1)
+                        .animation(.easeOut(duration: 0.15), value: statisticsHovered)
+                        .onHover { statisticsHovered = $0 }
                 }.padding(.top, 4)
                 Spacer()
             }
         }.padding(22).frame(minWidth: 430, minHeight: 250).onReceive(clock) { now = $0 }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("SelfControlTrackerSessionStarted"))) { _ in
+            showHistory = false
+            showGroups = false
+        }
         .sheet(item: $groupEditor) { request in GroupEditor(store: store, original: request.original) }
     }
 }
@@ -443,19 +482,21 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.contentView = NSHostingView(rootView: Dashboard(store: store, isDemo: isDemo, previewTimer: previewTimer))
         if !isDemo {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-            if let iconURL = Bundle.main.url(forResource: "SelfControlIcon", withExtension: "icns"), let icon = NSImage(contentsOf: iconURL) {
-                icon.size = NSSize(width: 18, height: 18)
-                icon.isTemplate = false
-                item.button?.image = icon
-            } else {
-                item.button?.image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: "SelfControl Tracker")
-            }
+            let icon = NSImage(systemSymbolName: "timer", accessibilityDescription: "SelfControl Tracker")
+            icon?.isTemplate = true
+            item.button?.image = icon
             item.button?.setAccessibilityLabel("Open SelfControl Tracker")
             item.button?.target = self
             item.button?.action = #selector(toggleWindow)
             statusItem = item
-            store.onSessionStarted = { [weak self] id in self?.askForSubject(id) }
+            store.onSessionStarted = { [weak self] id in
+                NotificationCenter.default.post(name: Notification.Name("SelfControlTrackerSessionStarted"), object: nil)
+                self?.showWindow()
+                self?.askForSubject(id)
+                self?.showWindow()
+            }
             store.startMonitoring()
+            if store.running { showWindow() }
         }
         if CommandLine.arguments.contains("--preview-prompt") { DispatchQueue.main.async { self.askForSubject(UUID()) } }
         if !CommandLine.arguments.contains("--background") { showWindow() }
@@ -587,6 +628,11 @@ if CommandLine.arguments.contains("--self-test") {
     try! oldStore.renameGroup("Unassigned", to: "New name")
     let oldReload = Store(path: nil, archiveURL: oldArchiveURL, startTimer: false)
     precondition(oldReload.groups().contains("New name") && !oldReload.groups().contains("Unassigned") && oldReload.sessions[0].id == oldSession.id)
+    let countBeforeDelete = migrated.sessions.count
+    let endBeforeDelete = migrated.sessions[0].actualEnd
+    try! migrated.deleteGroup("Algebra")
+    precondition(migrated.sessions.count == countBeforeDelete && migrated.sessions[0].actualEnd == endBeforeDelete)
+    precondition(migrated.sessions[0].name == "Focus session" && !migrated.groups().contains("Algebra"))
     let corruptPath = path.deletingLastPathComponent().appendingPathComponent("corrupt.json")
     try! Data("not a valid archive".utf8).write(to: corruptPath)
     let corruptStore = Store(path: nil, archiveURL: corruptPath, startTimer: false)

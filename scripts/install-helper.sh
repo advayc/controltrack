@@ -22,7 +22,7 @@ codesign --verify --deep --strict "$staged_app"
 python3 - "$stage_dir/new-agent.plist" "$app_path" <<'PY'
 import os, plistlib, sys
 with open(sys.argv[1], "wb") as f:
-    plistlib.dump({"Label": "local.focusledger.tracker", "ProgramArguments": [os.path.join(sys.argv[2], "Contents/MacOS/SelfControl Tracker Helper"), "--background"], "RunAtLoad": True}, f)
+    plistlib.dump({"Label": "local.focusledger.tracker", "ProgramArguments": [os.path.join(sys.argv[2], "Contents/MacOS/SelfControl Tracker Helper"), "--background"], "RunAtLoad": True, "KeepAlive": True}, f)
 PY
 if [ -f "$agent_path" ]; then cp -p "$agent_path" "$stage_dir/previous-agent.plist"; fi
 launchctl bootout "$service" 2>/dev/null || true

@@ -4,9 +4,9 @@ A macOS companion for [SelfControl](https://selfcontrolapp.com/) with an optiona
 
 ## Use
 
-Start a block in SelfControl, then name its subject when prompted. Click the SelfControl icon in the menu bar and choose View Statistics to see your weekly chart and history. Use Groups in the popup or Raycast to create or rename groups; renaming updates their sessions. Raycast can also rename individual sessions.
+Start a block in SelfControl, then name its subject when prompted. Click the SelfControl icon in the menu bar and choose View Statistics to see your weekly chart and history. Use Groups in the popup or Raycast to create, rename, or delete groups. Renaming updates their sessions; deleting keeps the history without a subject. Raycast can also rename individual sessions.
 
-The status dot is green above five minutes, amber in the last five, and red in the last minute. The helper starts at login, has no Dock icon, and keeps tracking after you close the windows.
+The status dot is green above five minutes, amber in the last five, and red in the last minute. The helper starts at login, restarts if it exits, and opens the popup for new blocks. It has no Dock icon. Expand Sessions in Statistics to see individual records.
 
 ![Compact statistics window showing example study times across a week, with totals by subject](media/weekly-view.png)
 
@@ -35,7 +35,7 @@ To stop tracking until the next login, run `launchctl bootout gui/$(id -u)/local
 
 ## Data and tests
 
-History and groups stay in `~/Library/Application Support/Focus Ledger/`; the extension sends no session data to a server, and this repository contains no personal history. SelfControl does not provide a full session history or block start times. The helper records a start when it detects a block, usually within five seconds, and follows timer extensions. It cannot recover blocks missed while it was stopped. SelfControl updates may change its internal settings format.
+History and groups stay in `~/Library/Application Support/Focus Ledger/`; the extension sends no session data to a server, and this repository contains no personal history. SelfControl does not provide a full session history or block start times. The helper records a start when it detects a block, usually within two seconds, and follows timer extensions. It cannot recover blocks missed while it was stopped. SelfControl updates may change its internal settings format.
 
 Run `npm test`, `npm run typecheck`, and `npm run build` to check the extension. `scripts/install-helper.sh` runs a helper self-test. These tests do not start a real block.
 

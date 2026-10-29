@@ -120,3 +120,7 @@ export async function selfControlPath(): Promise<string> {
   }
   throw new Error("SelfControl was not found in Applications.");
 }
+
+export async function deleteGroup(input: string): Promise<void> {
+  await sendCommand({ type: "deleteGroup", name: validateName(input) });
+}

@@ -1,6 +1,6 @@
-import { Action, ActionPanel, Form, Icon, List, showToast, Toast, useNavigation } from "@raycast/api";
+import { Action, ActionPanel, confirmAlert, Alert, Form, Icon, List, showToast, Toast, useNavigation } from "@raycast/api";
 import { useCallback, useEffect, useState } from "react";
-import { addGroup, groups, renameGroup } from "./lib/storage";
+import { addGroup, groups, renameGroup, deleteGroup } from "./lib/storage";
 
 export function GroupForm({ original, onSaved }: { original?: string; onSaved: () => void }) {
   const { pop } = useNavigation();
@@ -39,11 +39,17 @@ export default function Groups() {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
+  async function remove(name: string) {
+    if (!await confirmAlert({ title: "Delete this group?", message: "Its sessions will stay in your history without a subject.", primaryAction: { title: "Delete Group", style: Alert.ActionStyle.Destructive } })) return;
+    const toast = await showToast({ style: Toast.Style.Animated, title: "Deleting group" });
+    try { await deleteGroup(name); toast.style = Toast.Style.Success; toast.title = "Group deleted"; await refresh(); }
+    catch (error) { toast.style = Toast.Style.Failure; toast.title = "Could not delete group"; toast.message = error instanceof Error ? error.message : undefined; }
+  }
   return <List isLoading={isLoading} searchBarPlaceholder="Search subjects or groups">
     <List.Item icon={Icon.Plus} title="Create Group" actions={<ActionPanel><Action.Push title="Create Group" target={<GroupForm onSaved={refresh} />} /></ActionPanel>} />
     {error && <List.Item icon={Icon.ExclamationMark} title="Could not read groups" subtitle={error} actions={<ActionPanel><Action title="Retry" onAction={refresh} /></ActionPanel>} />}
     {names.length > 0 && <List.Section title="Subjects / Groups">
-      {names.map((name) => <List.Item key={name} icon={Icon.Folder} title={name} subtitle="Available when starting a block" actions={<ActionPanel><Action.Push title="Rename Group" target={<GroupForm original={name} onSaved={refresh} />} /><Action.Push title="Create Group" target={<GroupForm onSaved={refresh} />} /></ActionPanel>} />)}
+      {names.map((name) => <List.Item key={name} icon={Icon.Folder} title={name} subtitle="Available when starting a block" actions={<ActionPanel><Action.Push title="Rename Group" target={<GroupForm original={name} onSaved={refresh} />} /><Action.Push title="Create Group" target={<GroupForm onSaved={refresh} />} /><Action title="Delete Group" style={Action.Style.Destructive} onAction={() => remove(name)} /></ActionPanel>} />)}
     </List.Section>}
   </List>;
 }
