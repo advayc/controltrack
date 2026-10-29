@@ -276,6 +276,15 @@ final class Store: ObservableObject {
             }
         }
     }
+    func focus(group: String, in day: Date, now: Date = Date()) -> TimeInterval {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: day)
+        let end = calendar.date(byAdding: .day, value: 1, to: start)!
+        return sessions.filter { sameGroup($0.name, group) }.reduce(0) { sum, session in
+            let stop = session.actualEnd ?? min(now, session.plannedEnd)
+            return sum + max(0, min(end, stop).timeIntervalSince(max(start, session.start)))
+        }
+    }
     func focus(in day: Date, now: Date = Date()) -> TimeInterval {
         let cal = Calendar.current; let start = cal.startOfDay(for: day); let end = cal.date(byAdding: .day, value: 1, to: start)!
         return sessions.reduce(0) { total, session in
@@ -343,10 +352,39 @@ struct GroupActions: View {
         .animation(.easeOut(duration: 0.15), value: hovered).onHover { hovered = $0 }
     }
 }
+struct ChartSegment: View {
+    let day: Date
+    let group: String
+    let seconds: TimeInterval
+    let maximum: TimeInterval
+    let color: Color
+    let sessionHovered: Bool
+    @Binding var inspectedDay: Date?
+    @Binding var inspectedGroup: String?
+    var body: some View {
+        Rectangle().fill(color)
+            .brightness(sessionHovered ? -0.16 : 0)
+            .opacity(inspectedDay == day && inspectedGroup == group ? 0.7 : 1)
+            .frame(height: CGFloat(seconds / maximum) * 52)
+            .contentShape(Rectangle())
+            .onHover { over in
+                if over { inspectedDay = day; inspectedGroup = group }
+                else if inspectedDay == day && inspectedGroup == group { inspectedGroup = nil }
+            }
+            .onTapGesture { inspectedDay = day; inspectedGroup = group }
+            .help(group + ": " + durationText(seconds))
+    }
+}
 struct GroupEditorRequest: Identifiable {
     let id = UUID()
     let original: String?
 }
+private let presetColorList: NSColorList = {
+    let list = NSColorList(name: "SelfControl Presets")
+    let colors: [(String, NSColor)] = [("Blue", .systemBlue), ("Green", .systemGreen), ("Orange", .systemOrange), ("Purple", .systemPurple), ("Pink", .systemPink), ("Teal", .systemTeal)]
+    for (name, color) in colors { list.setColor(color, forKey: name) }
+    return list
+}()
 struct GroupEditor: View {
     @ObservedObject var store: Store
     let original: String?
@@ -380,6 +418,7 @@ struct GroupEditor: View {
                 Button("Save", action: save).keyboardShortcut(.defaultAction)
             }
         }.padding(20).frame(width: 360)
+        .onAppear { NSColorPanel.shared.attachColorList(presetColorList) }
     }
 }
 struct Dashboard: View {
@@ -397,6 +436,8 @@ struct Dashboard: View {
     @State private var sessionsExpanded = false
     @State private var statisticsHovered = false
     @State private var inspectedDay: Date?
+    @State private var inspectedGroup: String?
+    @State private var hoveredSessionGroup: String?
     let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     var remaining: TimeInterval? { store.sessions.first(where: { $0.actualEnd == nil }).map { max(0, $0.plannedEnd.timeIntervalSince(now)) } }
     var statusColor: Color {
@@ -468,13 +509,10 @@ struct Dashboard: View {
                             Text(durationText(values[index])).font(.caption2).foregroundColor(.secondary)
                             VStack(spacing: 0) {
                                 ForEach(store.groups() + ["Focus session"], id: \.self) { group in
-                                    let start = Calendar.current.startOfDay(for: day)
-                                    let end = Calendar.current.date(byAdding: .day, value: 1, to: start)!
-                                    let seconds = store.sessions.filter { sameGroup($0.name, group) }.reduce(0.0) { sum, session in
-                                        let stop = session.actualEnd ?? min(now, session.plannedEnd)
-                                        return sum + max(0, min(end, stop).timeIntervalSince(max(start, session.start)))
+                                    let seconds = store.focus(group: group, in: day, now: now)
+                                    if seconds > 0 {
+                                        ChartSegment(day: day, group: group, seconds: seconds, maximum: maximum, color: sameGroup(group, "Focus session") ? .secondary : store.displayColor(group), sessionHovered: hoveredSessionGroup.map { sameGroup($0, group) } ?? false, inspectedDay: $inspectedDay, inspectedGroup: $inspectedGroup)
                                     }
-                                    if seconds > 0 { Rectangle().fill(sameGroup(group, "Focus session") ? Color.secondary : store.displayColor(group)).frame(height: CGFloat(seconds / maximum) * 52) }
                                 }
                             }.frame(height: max(3, CGFloat(values[index] / maximum) * 52), alignment: .bottom)
                              .background(Color.secondary.opacity(values[index] == 0 ? 0.15 : 0))
@@ -483,27 +521,21 @@ struct Dashboard: View {
                         }.frame(maxWidth: .infinity).padding(.vertical, 4)
                         .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(inspectedDay == day ? 0.08 : 0)))
                         .contentShape(Rectangle())
-                        .onHover { over in if over { inspectedDay = day } else if inspectedDay == day { inspectedDay = nil } }
+                        .onHover { over in if over { inspectedDay = day } else if inspectedDay == day { inspectedDay = nil; inspectedGroup = nil } }
                         .onTapGesture { inspectedDay = day }
                         .help(day.formatted(date: .abbreviated, time: .omitted) + ": " + durationText(values[index]))
                         .animation(.easeOut(duration: 0.15), value: inspectedDay)
                     }
                 }.frame(height: 85, alignment: .bottom)
-                if let day = inspectedDay {
-                    let start = Calendar.current.startOfDay(for: day)
-                    let end = Calendar.current.date(byAdding: .day, value: 1, to: start)!
-                    let names = store.groups() + ["Focus session"]
-                    let breakdown = names.compactMap { name -> String? in
-                        let seconds = store.sessions.filter { sameGroup($0.name, name) }.reduce(0.0) { sum, session in
-                            let stop = session.actualEnd ?? min(now, session.plannedEnd)
-                            return sum + max(0, min(end, stop).timeIntervalSince(max(start, session.start)))
-                        }
-                        return seconds > 0 ? name + ": " + durationText(seconds) : nil
-                    }
-                    Text(day.formatted(date: .abbreviated, time: .omitted) + (breakdown.isEmpty ? " · 0m" : " · " + breakdown.joined(separator: "  ·  ")))
-                        .font(.caption).foregroundColor(.secondary).lineLimit(3)
+                if let day = inspectedDay, let group = inspectedGroup {
+                    let seconds = store.focus(group: group, in: day, now: now)
+                    Text(day.formatted(date: .abbreviated, time: .omitted) + " · " + group + ": " + durationText(seconds))
+                        .font(.caption).foregroundColor(.secondary).lineLimit(2)
+                } else if let day = inspectedDay {
+                    Text(day.formatted(date: .abbreviated, time: .omitted) + " · " + durationText(store.focus(in: day, now: now)))
+                        .font(.caption).foregroundColor(.secondary)
                 } else {
-                    Text("Hover over a day for details").font(.caption).foregroundColor(.secondary)
+                    Text("Hover over a segment for details").font(.caption).foregroundColor(.secondary)
                 }
                 if store.sessions.isEmpty {
                     Spacer(); Text("No sessions yet").foregroundColor(.secondary); Spacer()
@@ -529,6 +561,10 @@ struct Dashboard: View {
                                     Spacer()
                                     Text(durationText((s.actualEnd ?? min(now, s.plannedEnd)).timeIntervalSince(s.start))).monospacedDigit().foregroundColor(.secondary)
                                 }.padding(.vertical, 8)
+                                .onHover { over in
+                                    if over { hoveredSessionGroup = s.name }
+                                    else if hoveredSessionGroup == s.name { hoveredSessionGroup = nil }
+                                }
                                 Divider()
                             }
                             }.padding(.vertical, 4)
@@ -762,6 +798,10 @@ if CommandLine.arguments.contains("--self-test") {
     try! migrated.deleteGroup("Algebra")
     precondition(migrated.sessions.count == countBeforeDelete && migrated.sessions[0].actualEnd == endBeforeDelete)
     precondition(migrated.sessions[0].name == "Focus session" && !migrated.groups().contains("Algebra"))
+    let splitStore = Store(path: nil, archiveURL: path.deletingLastPathComponent().appendingPathComponent("split.json"), startTimer: false)
+    let splitStart = Calendar.current.date(byAdding: .hour, value: 12, to: Calendar.current.startOfDay(for: start))!
+    splitStore.sessions = [Session(name: "Study A", start: splitStart, plannedEnd: splitStart.addingTimeInterval(1200), actualEnd: splitStart.addingTimeInterval(1200)), Session(name: "Study B", start: splitStart, plannedEnd: splitStart.addingTimeInterval(1800), actualEnd: splitStart.addingTimeInterval(1800))]
+    precondition(splitStore.focus(group: "Study A", in: splitStart) == 1200 && splitStore.focus(group: "Study B", in: splitStart) == 1800)
     let corruptPath = path.deletingLastPathComponent().appendingPathComponent("corrupt.json")
     try! Data("not a valid archive".utf8).write(to: corruptPath)
     let corruptStore = Store(path: nil, archiveURL: corruptPath, startTimer: false)
