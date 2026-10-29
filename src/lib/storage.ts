@@ -8,18 +8,18 @@ export const root = path.join(os.homedir(), "Library", "Application Support", "F
 const archivePath = path.join(root, "sessions.json");
 const groupPath = path.join(root, "groups");
 const commandPath = path.join(root, "commands");
-type Archive = { sessions: Session[]; groupNames: string[]; importedGroupFiles: Set<string> };
+type Archive = { sessions: Session[]; groupNames: string[]; importedGroupFiles: Set<string>; groupColors: Record<string, number> };
 
 async function readArchive(): Promise<Archive> {
   let data: string;
   try { data = await fs.readFile(archivePath, "utf8"); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { sessions: [], groupNames: [], importedGroupFiles: new Set() };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { sessions: [], groupNames: [], importedGroupFiles: new Set(), groupColors: {} };
     throw error;
   }
   const parsed: unknown = JSON.parse(data);
   if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { sessions?: unknown }).sessions)) throw new Error("The session history is not in the expected format.");
-  const archive = parsed as { sessions: unknown[]; groupNames?: unknown; importedGroupFiles?: unknown };
+  const archive = parsed as { sessions: unknown[]; groupNames?: unknown; importedGroupFiles?: unknown; groupColors?: Record<string, number> };
   const result = archive.sessions.map(readSession);
   if (result.some((session) => session === null)) throw new Error("A session in the history is not in the expected format.");
   if (archive.groupNames !== undefined && (!Array.isArray(archive.groupNames) || archive.groupNames.some((name) => typeof name !== "string"))) throw new Error("The group list is not in the expected format.");
@@ -28,6 +28,7 @@ async function readArchive(): Promise<Archive> {
     sessions: (result as Session[]).sort((a, b) => b.start - a.start),
     groupNames: (archive.groupNames ?? []) as string[],
     importedGroupFiles: new Set((archive.importedGroupFiles ?? []) as string[]),
+    groupColors: archive.groupColors ?? {},
   };
 }
 
@@ -123,4 +124,14 @@ export async function selfControlPath(): Promise<string> {
 
 export async function deleteGroup(input: string): Promise<void> {
   await sendCommand({ type: "deleteGroup", name: validateName(input) });
+}
+
+export async function groupColor(name: string): Promise<number> {
+  const colors = (await readArchive()).groupColors;
+  const key = Object.keys(colors).find((item) => normalizeName(item) === normalizeName(name));
+  if (key && Number.isInteger(colors[key]) && colors[key] >= 0 && colors[key] < 6) return colors[key];
+  return [...Buffer.from(name.toLowerCase())].reduce((sum, byte) => (sum + byte) % 6, 0);
+}
+export async function setGroupColor(name: string, colorIndex: number): Promise<void> {
+  await sendCommand({ type: "setGroupColor", name: validateName(name), colorIndex });
 }

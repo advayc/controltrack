@@ -1,9 +1,11 @@
 import { Action, ActionPanel, confirmAlert, Alert, Form, Icon, List, showToast, Toast, useNavigation } from "@raycast/api";
 import { useCallback, useEffect, useState } from "react";
-import { addGroup, groups, renameGroup, deleteGroup } from "./lib/storage";
+import { addGroup, groups, renameGroup, deleteGroup, groupColor, setGroupColor } from "./lib/storage";
 
 export function GroupForm({ original, onSaved }: { original?: string; onSaved: () => void }) {
   const { pop } = useNavigation();
+  const [color, setColor] = useState("0");
+  useEffect(() => { if (original) void groupColor(original).then((value) => setColor(String(value))); }, [original]);
   async function submit(values: { name: string }) {
     const toast = await showToast({ style: Toast.Style.Animated, title: original ? "Renaming group" : "Creating group" });
     try {
@@ -15,6 +17,7 @@ export function GroupForm({ original, onSaved }: { original?: string; onSaved: (
         toast.title = result.existing ? "Group already exists" : "Group created";
         toast.message = result.name;
       }
+      await setGroupColor(values.name.trim(), Number(color));
       toast.style = Toast.Style.Success;
       onSaved(); pop();
     } catch (error) {
@@ -25,6 +28,9 @@ export function GroupForm({ original, onSaved }: { original?: string; onSaved: (
   }
   return <Form actions={<ActionPanel><Action.SubmitForm title={original ? "Save Group Name" : "Save Group"} onSubmit={submit} /></ActionPanel>}>
     <Form.TextField id="name" title="Subject / Group" defaultValue={original} placeholder="e.g. Mathematics" />
+    <Form.Dropdown id="color" title="Color" value={color} onChange={setColor}>
+      {["Blue", "Green", "Orange", "Purple", "Pink", "Teal"].map((name, index) => <Form.Dropdown.Item key={name} value={String(index)} title={name} />)}
+    </Form.Dropdown>
     <Form.Description text={original ? "Renaming a group also updates its existing sessions." : "This group will be offered when you start a SelfControl block."} />
   </Form>;
 }
