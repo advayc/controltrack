@@ -649,7 +649,11 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.contentView = NSHostingView(rootView: Dashboard(store: store, isDemo: isDemo, previewTimer: previewTimer))
         if !isDemo {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            item.autosaveName = NSStatusItem.AutosaveName("SelfControlTracker")
+            item.isVisible = true
             item.button?.image = menuBarIcon()
+            item.button?.imagePosition = .imageOnly
+            item.button?.toolTip = "SelfControl Tracker"
             item.button?.setAccessibilityLabel("Open SelfControl Tracker")
             item.button?.target = self
             item.button?.action = #selector(toggleWindow)
