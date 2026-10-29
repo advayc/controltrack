@@ -312,6 +312,18 @@ func menuBarIcon() -> NSImage {
         let jaw = NSBezierPath(); jaw.move(to: NSPoint(x: 9, y: 10)); jaw.line(to: NSPoint(x: 9, y: 7)); jaw.line(to: NSPoint(x: 15, y: 7)); jaw.line(to: NSPoint(x: 15, y: 10)); jaw.lineWidth = 1.3; jaw.stroke()
         return true
     }
+    if let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 48, pixelsHigh: 48, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0), let context = NSGraphicsContext(bitmapImageRep: bitmap) {
+        bitmap.size = NSSize(width: 24, height: 24)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.scaleBy(x: 2, y: 2)
+        image.draw(in: NSRect(x: 0, y: 0, width: 24, height: 24), from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        let rendered = NSImage(size: NSSize(width: 18, height: 18))
+        rendered.addRepresentation(bitmap)
+        rendered.isTemplate = true
+        return rendered
+    }
     image.size = NSSize(width: 18, height: 18)
     image.isTemplate = true
     return image
