@@ -33,6 +33,11 @@ func durationText(_ seconds: TimeInterval) -> String {
     let mins = max(0, Int(seconds / 60)); let h = mins / 60; let m = mins % 60
     return h > 0 ? "\(h)h \(m)m" : "\(m)m"
 }
+func countdownText(_ seconds: TimeInterval) -> String {
+    let total = max(0, Int(ceil(seconds)))
+    let hours = total / 3600, minutes = (total % 3600) / 60, remainder = total % 60
+    return String(format: "%02d:%02d:%02d", hours, minutes, remainder)
+}
 final class Store: ObservableObject {
     @Published var sessions: [Session] = []
     @Published var nextName = ""
@@ -152,10 +157,10 @@ struct Dashboard: View {
     @ObservedObject var store: Store
     let isDemo: Bool
     @State private var showHistory: Bool
-    init(store: Store, isDemo: Bool = false) {
+    init(store: Store, isDemo: Bool = false, previewTimer: Bool = false) {
         self.store = store
         self.isDemo = isDemo
-        _showHistory = State(initialValue: isDemo)
+        _showHistory = State(initialValue: isDemo && !previewTimer)
     }
     @State private var now = Date()
     let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -165,10 +170,8 @@ struct Dashboard: View {
         return seconds <= 60 ? .red : seconds <= 300 ? .orange : .green
     }
     var remainingText: String {
-        guard let seconds = remaining else { return "Waiting for SelfControl…" }
-        let total = max(0, Int(ceil(seconds)))
-        let hours = total / 3600, minutes = (total % 3600) / 60, remainder = total % 60
-        return hours > 0 ? String(format: "%d:%02d:%02d remaining", hours, minutes, remainder) : String(format: "%d:%02d remaining", minutes, remainder)
+        guard let seconds = remaining else { return "" }
+        return countdownText(seconds)
     }
     var days: [Date] { (0..<7).reversed().compactMap { Calendar.current.date(byAdding: .day, value: -$0, to: now) } }
     var groupTotals: [(name: String, seconds: TimeInterval)] {
@@ -228,10 +231,20 @@ struct Dashboard: View {
                 }
             } else {
                 Spacer()
-                Text(store.running ? "Block in progress" : "Ready for your next block").foregroundColor(statusColor)
-                if store.running { Text(remainingText).font(.callout).monospacedDigit().foregroundColor(statusColor) }
+                HStack(spacing: 6) {
+                    Circle().fill(statusColor).frame(width: 7, height: 7)
+                    Text(store.running ? "Block in progress" : "Ready for your next block")
+                }
+                if store.running && remaining != nil {
+                    Text(remainingText)
+                        .font(.system(size: 42, weight: .regular))
+                        .monospacedDigit()
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
                 if let error = store.readError { Text(error).font(.caption).foregroundColor(.red) }
-                else { Text("Start a block in SelfControl. You’ll be asked for a subject or group.").font(.callout).foregroundColor(.secondary).multilineTextAlignment(.center) }
+                else if !store.running { Text("Start a block in SelfControl. You’ll be asked for a subject or group.").font(.callout).foregroundColor(.secondary).multilineTextAlignment(.center) }
                 HStack(spacing: 12) {
                     Button("Open SelfControl") { NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: NSHomeDirectory() + "/Applications/SelfControl.app"), configuration: NSWorkspace.OpenConfiguration()) }
                     Button("View Statistics") { showHistory = true }
@@ -244,11 +257,14 @@ struct Dashboard: View {
 final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let store: Store
     let isDemo: Bool
+    let previewTimer: Bool
     var window: NSWindow!
     var statusItem: NSStatusItem?
     override init() {
-        let demo = CommandLine.arguments.contains("--demo") || CommandLine.arguments.contains("--export-demo")
+        let timerDemo = CommandLine.arguments.contains("--preview-timer") || CommandLine.arguments.contains("--export-timer")
+        let demo = timerDemo || CommandLine.arguments.contains("--demo") || CommandLine.arguments.contains("--export-demo")
         isDemo = demo
+        previewTimer = timerDemo
         if demo {
             let archive = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("sessions.json")
             let exampleStore = Store(path: nil, archiveURL: archive, startTimer: false)
@@ -262,6 +278,11 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 let end = start.addingTimeInterval(TimeInterval(minutes[index] * 60))
                 exampleStore.sessions.insert(Session(name: subjects[index], start: start, plannedEnd: end, actualEnd: end), at: 0)
             }
+            if timerDemo {
+                let now = Date()
+                exampleStore.sessions = [Session(name: "Example", start: now.addingTimeInterval(-45), plannedEnd: now.addingTimeInterval(15))]
+                exampleStore.running = true
+            }
             store = exampleStore
         } else {
             store = Store(startTimer: false)
@@ -270,10 +291,10 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: isDemo ? 440 : 330), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: isDemo && !previewTimer ? 440 : 330), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "SelfControl Tracker"; window.center(); window.delegate = self; window.isReleasedWhenClosed = false
         if isDemo { window.appearance = NSAppearance(named: .darkAqua) }
-        window.contentView = NSHostingView(rootView: Dashboard(store: store, isDemo: isDemo))
+        window.contentView = NSHostingView(rootView: Dashboard(store: store, isDemo: isDemo, previewTimer: previewTimer))
         if !isDemo {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             if let iconURL = Bundle.main.url(forResource: "SelfControlIcon", withExtension: "icns"), let icon = NSImage(contentsOf: iconURL) {
@@ -292,7 +313,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if CommandLine.arguments.contains("--preview-prompt") { DispatchQueue.main.async { self.askForSubject(UUID()) } }
         if !CommandLine.arguments.contains("--background") { showWindow() }
-        if let argument = CommandLine.arguments.firstIndex(of: "--export-demo"), argument + 1 < CommandLine.arguments.count {
+        if let argument = CommandLine.arguments.firstIndex(where: { $0 == "--export-demo" || $0 == "--export-timer" }), argument + 1 < CommandLine.arguments.count {
             let destination = URL(fileURLWithPath: CommandLine.arguments[argument + 1])
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 guard let view = self.window.contentView, let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
@@ -340,6 +361,9 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) { NSApp.setActivationPolicy(.accessory) }
 }
 if CommandLine.arguments.contains("--self-test") {
+    precondition(countdownText(15) == "00:00:15")
+    precondition(countdownText(61) == "00:01:01")
+    precondition(countdownText(3601) == "01:00:01")
     let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("sessions.json")
     let s = Store(path: nil, archiveURL: path, startTimer: false)
     let start = Date(timeIntervalSince1970: 1800000000); let end = start.addingTimeInterval(3600)

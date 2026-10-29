@@ -23,9 +23,10 @@ test('caps active time at now and at the scheduled end', () => {
   const session = { id: 'a', name: 'Math', start: 0, plannedEnd: 60000 };
   assert.equal(elapsed(session, 30000), 30000);
   assert.equal(elapsed(session, 120000), 60000);
-  assert.equal(countdown(61000), '1:01');
-  assert.equal(countdown(3601000), '1:00:01');
-  assert.equal(countdown(-3), '0:00');
+  assert.equal(countdown(15000), '00:00:15');
+  assert.equal(countdown(61000), '00:01:01');
+  assert.equal(countdown(3601000), '01:00:01');
+  assert.equal(countdown(-3), '00:00:00');
   assert.equal(duration(3660000), '1h 1m');
 });
 
