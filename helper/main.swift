@@ -558,12 +558,8 @@ struct Dashboard: View {
                     ScrollView {
                         VStack(spacing: 0) {
                             HStack { Text("Subjects / Groups").fontWeight(.semibold); Spacer() }.padding(.vertical, 8)
-                            ForEach(groupTotals, id: \.name) { group in
-                                if !sameGroup(group.name, "Focus session") {
-                                    GroupActions(name: group.name, duration: durationText(group.seconds), color: store.displayColor(group.name), rename: { groupEditor = GroupEditorRequest(original: group.name) }, remove: { deleteGroup(group.name) })
-                                } else {
-                                    HStack { Text(group.name); Spacer(); Text(durationText(group.seconds)).foregroundColor(.secondary) }.padding(.vertical, 5)
-                                }
+                            ForEach(groupTotals.filter { !sameGroup($0.name, "Focus session") }, id: \.name) { group in
+                                GroupActions(name: group.name, duration: durationText(group.seconds), color: store.displayColor(group.name), rename: { groupEditor = GroupEditorRequest(original: group.name) }, remove: { deleteGroup(group.name) })
                             }
                             Divider().padding(.vertical, 8)
                             DisclosureGroup("Sessions (\(store.sessions.count))", isExpanded: $sessionsExpanded) {
