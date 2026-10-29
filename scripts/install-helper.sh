@@ -37,7 +37,7 @@ if launchctl print "$service" >/dev/null 2>&1; then
 fi
 backup_path=""
 if [ -e "$app_path" ]; then
-  backup_path="$data_dir/SelfControl Tracker Helper.backup-$(date +%Y%m%d%H%M%S)-$$.app"
+  backup_path="$data_dir/SelfControl Tracker Helper.backup-$(date +%Y%m%d%H%M%S)-$$.disabled"
   mv "$app_path" "$backup_path"
 fi
 mv "$staged_app" "$app_path"
