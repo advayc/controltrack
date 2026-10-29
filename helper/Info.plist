@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleExecutable</key><string>SelfControl Tracker Helper</string>
-  <key>CFBundleIdentifier</key><string>local.focusledger.tracker</string>
+  <key>CFBundleIdentifier</key><string>local.controltrack.tracker</string>
   <key>CFBundleName</key><string>SelfControl Tracker</string>
   <key>CFBundleIconFile</key><string>SelfControlIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>

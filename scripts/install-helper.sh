@@ -35,17 +35,32 @@ if launchctl print "$service" >/dev/null 2>&1; then
   echo "The previous tracker did not stop; its installation was left unchanged." >&2
   exit 1
 fi
+# A manually opened tracker is not managed by launchd. Stop that exact executable too.
+python3 - "$app_path/Contents/MacOS/SelfControl Tracker Helper" <<'PYCODE'
+import os, signal, subprocess, sys
+executable = sys.argv[1]
+result = subprocess.run(["/bin/ps", "-ax", "-o", "pid=,uid=,command="], capture_output=True, text=True, check=True)
+for line in result.stdout.splitlines():
+    parts = line.strip().split(None, 2)
+    if len(parts) == 3 and int(parts[1]) == os.getuid() and (parts[2] == executable or parts[2].startswith(executable + " ")):
+        try: os.kill(int(parts[0]), signal.SIGTERM)
+        except ProcessLookupError: pass
+PYCODE
 backup_path=""
 if [ -e "$app_path" ]; then
   backup_path="$data_dir/SelfControl Tracker Helper.backup-$(date +%Y%m%d%H%M%S)-$$.disabled"
   mv "$app_path" "$backup_path"
 fi
 mv "$staged_app" "$app_path"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app_path" || true
 mv "$stage_dir/new-agent.plist" "$agent_path"
 if ! launchctl bootstrap "gui/$(id -u)" "$agent_path"; then
   echo "Could not start the new helper; restoring the previous launch agent." >&2
   rm -rf "$app_path"
-  if [ -n "$backup_path" ]; then mv "$backup_path" "$app_path"; fi
+  if [ -n "$backup_path" ]; then
+    mv "$backup_path" "$app_path"
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app_path" || true
+  fi
   if [ -f "$stage_dir/previous-agent.plist" ]; then
     cp -p "$stage_dir/previous-agent.plist" "$agent_path"
     launchctl bootstrap "gui/$(id -u)" "$agent_path" || true
