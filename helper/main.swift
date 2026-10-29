@@ -243,6 +243,63 @@ final class Store: ObservableObject {
         }
     }
 }
+func menuBarIcon() -> NSImage {
+    let image = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
+        NSColor.black.setStroke()
+        let spade = NSBezierPath()
+        spade.move(to: NSPoint(x: 12, y: 23))
+        spade.curve(to: NSPoint(x: 2, y: 9), controlPoint1: NSPoint(x: 9, y: 19), controlPoint2: NSPoint(x: 2, y: 15))
+        spade.curve(to: NSPoint(x: 10, y: 6), controlPoint1: NSPoint(x: 2, y: 4), controlPoint2: NSPoint(x: 7, y: 4))
+        spade.line(to: NSPoint(x: 8, y: 1.5)); spade.line(to: NSPoint(x: 16, y: 1.5)); spade.line(to: NSPoint(x: 14, y: 6))
+        spade.curve(to: NSPoint(x: 22, y: 9), controlPoint1: NSPoint(x: 17, y: 4), controlPoint2: NSPoint(x: 22, y: 4))
+        spade.curve(to: NSPoint(x: 12, y: 23), controlPoint1: NSPoint(x: 22, y: 15), controlPoint2: NSPoint(x: 15, y: 19))
+        spade.close(); spade.lineWidth = 1.5; spade.lineJoinStyle = .round; spade.stroke()
+        let skull = NSBezierPath(roundedRect: NSRect(x: 7, y: 9, width: 10, height: 9), xRadius: 4, yRadius: 4)
+        skull.lineWidth = 1.3; skull.stroke()
+        NSColor.black.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 8.5, y: 12, width: 2.3, height: 2.8)).fill()
+        NSBezierPath(ovalIn: NSRect(x: 13.2, y: 12, width: 2.3, height: 2.8)).fill()
+        let jaw = NSBezierPath(); jaw.move(to: NSPoint(x: 9, y: 10)); jaw.line(to: NSPoint(x: 9, y: 7)); jaw.line(to: NSPoint(x: 15, y: 7)); jaw.line(to: NSPoint(x: 15, y: 10)); jaw.lineWidth = 1.3; jaw.stroke()
+        return true
+    }
+    image.size = NSSize(width: 18, height: 18)
+    image.isTemplate = true
+    return image
+}
+struct GroupIconButton: View {
+    let symbol: String
+    let label: String
+    var destructive = false
+    let action: () -> Void
+    @State private var hovered = false
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 13))
+                .foregroundColor(hovered ? (destructive ? .red : .accentColor) : .secondary)
+                .frame(width: 26, height: 26)
+                .background(RoundedRectangle(cornerRadius: 5).fill((destructive ? Color.red : Color.accentColor).opacity(hovered ? 0.16 : 0)))
+        }.buttonStyle(.plain).help(label).accessibilityLabel(label)
+        .animation(.easeOut(duration: 0.12), value: hovered).onHover { hovered = $0 }
+    }
+}
+struct GroupActions: View {
+    let name: String
+    let duration: String?
+    let rename: () -> Void
+    let remove: () -> Void
+    @State private var hovered = false
+    var body: some View {
+        HStack {
+            Text(name)
+            Spacer()
+            if let duration { Text(duration).monospacedDigit().foregroundColor(.secondary) }
+            GroupIconButton(symbol: "pencil", label: "Rename " + name, action: rename)
+            GroupIconButton(symbol: "trash", label: "Delete " + name, destructive: true, action: remove)
+        }.padding(.horizontal, 6).padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(hovered ? 0.08 : 0)))
+        .animation(.easeOut(duration: 0.15), value: hovered).onHover { hovered = $0 }
+    }
+}
 struct GroupEditorRequest: Identifiable {
     let id = UUID()
     let original: String?
@@ -292,6 +349,7 @@ struct Dashboard: View {
     @State private var groupEditor: GroupEditorRequest?
     @State private var sessionsExpanded = false
     @State private var statisticsHovered = false
+    @State private var inspectedDay: Date?
     let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     var remaining: TimeInterval? { store.sessions.first(where: { $0.actualEnd == nil }).map { max(0, $0.plannedEnd.timeIntervalSince(now)) } }
     var statusColor: Color {
@@ -326,7 +384,7 @@ struct Dashboard: View {
         }
     }
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 10) {
             if showGroups {
                 HStack {
                     Button("Back") { showGroups = false }
@@ -341,12 +399,7 @@ struct Dashboard: View {
                     ScrollView {
                         VStack(spacing: 0) {
                             ForEach(store.groups(), id: \.self) { name in
-                                HStack {
-                                    Text(name)
-                                    Spacer()
-                                    Button("Rename") { groupEditor = GroupEditorRequest(original: name) }.controlSize(.small)
-                                    Button("Delete") { deleteGroup(name) }.controlSize(.small)
-                                }.padding(.vertical, 8)
+                                GroupActions(name: name, duration: nil, rename: { groupEditor = GroupEditorRequest(original: name) }, remove: { deleteGroup(name) })
                                 Divider()
                             }
                         }
@@ -366,11 +419,19 @@ struct Dashboard: View {
                     ForEach(Array(days.enumerated()), id: \.offset) { index, day in
                         VStack(spacing: 3) {
                             Text(durationText(values[index])).font(.caption2).foregroundColor(.secondary)
-                            RoundedRectangle(cornerRadius: 2).fill(values[index] > 0 ? Color.accentColor : Color.secondary.opacity(0.15)).frame(height: max(3, CGFloat(values[index] / maximum) * 52))
+                            RoundedRectangle(cornerRadius: 2).fill(values[index] > 0 ? Color.accentColor.opacity(inspectedDay == day ? 0.65 : 1) : Color.secondary.opacity(0.15)).frame(height: max(3, CGFloat(values[index] / maximum) * 52))
                             Text(day.formatted(.dateTime.weekday(.abbreviated))).font(.caption2).foregroundColor(.secondary)
-                        }.frame(maxWidth: .infinity)
+                        }.frame(maxWidth: .infinity).padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(inspectedDay == day ? 0.08 : 0)))
+                        .contentShape(Rectangle())
+                        .onHover { over in if over { inspectedDay = day } else if inspectedDay == day { inspectedDay = nil } }
+                        .onTapGesture { inspectedDay = day }
+                        .help(day.formatted(date: .abbreviated, time: .omitted) + ": " + durationText(values[index]))
+                        .animation(.easeOut(duration: 0.15), value: inspectedDay)
                     }
                 }.frame(height: 85, alignment: .bottom)
+                Text(inspectedDay.map { $0.formatted(date: .abbreviated, time: .omitted) + " · " + durationText(store.focus(in: $0, now: now)) } ?? "Hover over a day for details")
+                    .font(.caption).foregroundColor(.secondary).frame(height: 12)
                 if store.sessions.isEmpty {
                     Spacer(); Text("No sessions yet").foregroundColor(.secondary); Spacer()
                 } else {
@@ -378,14 +439,11 @@ struct Dashboard: View {
                         VStack(spacing: 0) {
                             HStack { Text("Subjects / Groups").fontWeight(.semibold); Spacer() }.padding(.vertical, 8)
                             ForEach(groupTotals, id: \.name) { group in
-                                HStack {
-                                    Text(group.name)
-                                    Spacer()
-                                    Text(durationText(group.seconds)).monospacedDigit().foregroundColor(.secondary)
-                                    if !sameGroup(group.name, "Focus session") {
-                                        Button("Rename") { groupEditor = GroupEditorRequest(original: group.name) }.controlSize(.small)
-                                    }
-                                }.padding(.vertical, 5)
+                                if !sameGroup(group.name, "Focus session") {
+                                    GroupActions(name: group.name, duration: durationText(group.seconds), rename: { groupEditor = GroupEditorRequest(original: group.name) }, remove: { deleteGroup(group.name) })
+                                } else {
+                                    HStack { Text(group.name); Spacer(); Text(durationText(group.seconds)).foregroundColor(.secondary) }.padding(.vertical, 5)
+                                }
                             }
                             Divider().padding(.vertical, 8)
                             DisclosureGroup("Sessions (\(store.sessions.count))", isExpanded: $sessionsExpanded) {
@@ -482,9 +540,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.contentView = NSHostingView(rootView: Dashboard(store: store, isDemo: isDemo, previewTimer: previewTimer))
         if !isDemo {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-            let icon = NSImage(systemSymbolName: "timer", accessibilityDescription: "SelfControl Tracker")
-            icon?.isTemplate = true
-            item.button?.image = icon
+            item.button?.image = menuBarIcon()
             item.button?.setAccessibilityLabel("Open SelfControl Tracker")
             item.button?.target = self
             item.button?.action = #selector(toggleWindow)
