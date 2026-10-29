@@ -1,5 +1,6 @@
 import { Action, ActionPanel, Color, Form, Icon, List, showToast, Toast, useNavigation } from "@raycast/api";
-import { countdown, duration, elapsed, groupTotals, lastSevenDays, type Session } from "./lib/model";
+import { countdown, duration, elapsed, groupTotals, lastSevenDays, normalizeName, type Session } from "./lib/model";
+import { GroupForm } from "./groups";
 import { renameSession } from "./lib/storage";
 import { useSessions } from "./lib/use-sessions";
 
@@ -38,7 +39,7 @@ export default function Statistics() {
       {days.map((day) => <List.Item key={day.date.toISOString()} icon={Icon.Calendar} title={day.date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} subtitle={day.ms > 0 ? "▰".repeat(Math.max(1, Math.round(day.ms / maximum * 12))) : "—"} accessories={[{ text: duration(day.ms) }]} />)}
     </List.Section>
     {totals.length > 0 && <List.Section title="Subjects / Groups" subtitle="All time">
-      {totals.map((group) => <List.Item key={group.name} icon={Icon.Folder} title={group.name} accessories={[{ text: duration(group.ms) }]} />)}
+      {totals.map((group) => <List.Item key={group.name} icon={Icon.Folder} title={group.name} accessories={[{ text: duration(group.ms) }]} actions={normalizeName(group.name) === normalizeName("Focus session") ? undefined : <ActionPanel><Action.Push title="Rename Group" target={<GroupForm original={group.name} onSaved={refresh} />} /></ActionPanel>} />)}
     </List.Section>}
     {data.length > 0 && <List.Section title="Sessions" subtitle={`${data.length} recorded`}>
       {data.map((session) => <List.Item key={session.id} icon={Icon.Clock} title={session.name} subtitle={new Date(session.start).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })} accessories={[{ text: duration(elapsed(session, now)) }]} actions={<ActionPanel><Action.Push title="Rename Session" target={<RenameSession session={session} onSaved={refresh} />} /></ActionPanel>} />)}

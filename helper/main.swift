@@ -11,9 +11,28 @@ struct Session: Codable, Identifiable {
     var actualEnd: Date?
     var estimatedStart: Bool = false
 }
-struct Archive: Codable { var sessions: [Session] = []; var nextName: String = "" }
+struct Archive: Codable {
+    var sessions: [Session] = []
+    var nextName: String = ""
+    var groupNames: [String]? = nil
+    var importedGroupFiles: [String]? = nil
+}
 struct BlockState { var running: Bool; var end: Date? }
-struct TrackerCommand: Decodable { var type: String; var id: UUID; var name: String }
+struct TrackerCommand: Decodable { var type: String; var id: UUID?; var name: String; var oldName: String?; var response: Bool? }
+struct CommandResponse: Encodable { var ok: Bool; var error: String? }
+func groupError(_ message: String) -> NSError {
+    NSError(domain: "SelfControlTracker.Groups", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+}
+func sameGroup(_ first: String, _ second: String) -> Bool {
+    first.compare(second, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+}
+func validatedGroupName(_ input: String) throws -> String {
+    let name = input.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty else { throw groupError("Enter a subject or group.") }
+    guard name.count <= 120 && name.rangeOfCharacter(from: .controlCharacters) == nil else { throw groupError("Use a single line of at most 120 characters.") }
+    guard !sameGroup(name, "Focus session") else { throw groupError("Choose a name other than the default Focus session.") }
+    return name
+}
 
 func settingsPath() -> String? {
     let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
@@ -41,6 +60,8 @@ func countdownText(_ seconds: TimeInterval) -> String {
 final class Store: ObservableObject {
     @Published var sessions: [Session] = []
     @Published var nextName = ""
+    @Published var storedGroups: [String] = []
+    private var importedGroupFiles: Set<String> = []
     @Published var status = "Connecting to SelfControl…"
     @Published var running = false
     @Published var readError: String? = nil
@@ -57,12 +78,15 @@ final class Store: ObservableObject {
                 let data = try Data(contentsOf: self.archiveURL)
                 let archive = try JSONDecoder().decode(Archive.self, from: data)
                 sessions = archive.sessions; nextName = archive.nextName
+                storedGroups = archive.groupNames ?? []
+                importedGroupFiles = Set(archive.importedGroupFiles ?? [])
             } catch {
                 archiveHealthy = false
                 status = "History unavailable"
                 readError = "Could not read the existing session history. It has not been changed."
             }
         }
+        if archiveHealthy { importLegacyGroups() }
         if startTimer { startMonitoring() }
     }
     func startMonitoring() {
@@ -73,13 +97,14 @@ final class Store: ObservableObject {
         guard archiveHealthy else { return false }
         do {
             try FileManager.default.createDirectory(at: archiveURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(Archive(sessions: sessions, nextName: nextName))
+            let data = try JSONEncoder().encode(Archive(sessions: sessions, nextName: nextName, groupNames: storedGroups, importedGroupFiles: importedGroupFiles.sorted()))
             try data.write(to: archiveURL, options: .atomic)
             return true
         } catch { readError = "Could not save session history: \(error.localizedDescription)"; return false }
     }
     func poll(now: Date = Date()) {
         guard archiveHealthy else { return }
+        importLegacyGroups()
         processCommands()
         guard let path = statePath else { status = "SelfControl unavailable"; readError = "Could not locate SelfControl's settings."; return }
         do {
@@ -112,37 +137,86 @@ final class Store: ObservableObject {
     }
     func rename(_ id: UUID, _ value: String) { if let i = sessions.firstIndex(where: { $0.id == id }) { sessions[i].name = value; save() } }
     var groupDirectory: URL { archiveURL.deletingLastPathComponent().appendingPathComponent("groups", isDirectory: true) }
-    func groups() -> [String] {
+    func importLegacyGroups() {
         let urls = (try? FileManager.default.contentsOfDirectory(at: groupDirectory, includingPropertiesForKeys: nil)) ?? []
-        let explicit = urls.filter { $0.pathExtension == "json" }.compactMap { url -> String? in
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            return try? JSONDecoder().decode(String.self, from: data)
+        let oldGroups = storedGroups
+        let oldImported = importedGroupFiles
+        for url in urls where url.pathExtension == "json" && !importedGroupFiles.contains(url.lastPathComponent) {
+            guard let data = try? Data(contentsOf: url), let name = try? JSONDecoder().decode(String.self, from: data) else { continue }
+            importedGroupFiles.insert(url.lastPathComponent)
+            if let valid = try? validatedGroupName(name), !storedGroups.contains(where: { sameGroup($0, valid) }) { storedGroups.append(valid) }
         }
-        let names = explicit + sessions.map { $0.name }
+        if oldImported != importedGroupFiles && !save() {
+            storedGroups = oldGroups
+            importedGroupFiles = oldImported
+        }
+    }
+    func groups() -> [String] {
         var result: [String] = []
-        for name in names {
-            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty && trimmed != "Focus session" && !result.contains(where: { $0.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) { result.append(trimmed) }
+        for rawName in storedGroups + sessions.map({ $0.name }) {
+            guard let name = try? validatedGroupName(rawName) else { continue }
+            if !result.contains(where: { sameGroup($0, name) }) { result.append(name) }
         }
         return result.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
-    func addGroup(_ name: String) throws {
-        try FileManager.default.createDirectory(at: groupDirectory, withIntermediateDirectories: true)
-        let url = groupDirectory.appendingPathComponent(UUID().uuidString + ".json")
-        try JSONEncoder().encode(name).write(to: url, options: .atomic)
+    func addGroup(_ input: String) throws {
+        let name = try validatedGroupName(input)
+        if groups().contains(where: { sameGroup($0, name) }) { return }
+        let previous = storedGroups
+        storedGroups.append(name)
+        if !save() { storedGroups = previous; throw groupError("Could not save the group. Try again.") }
+    }
+    func renameGroup(_ oldInput: String, to newInput: String) throws {
+        let oldName = try validatedGroupName(oldInput)
+        let newName = try validatedGroupName(newInput)
+        let existing = groups()
+        guard existing.contains(where: { sameGroup($0, oldName) }) else { throw groupError("That group no longer exists.") }
+        guard !existing.contains(where: { sameGroup($0, newName) && !sameGroup($0, oldName) }) else { throw groupError("A group with that name already exists.") }
+        let previousGroups = storedGroups
+        let previousSessions = sessions
+        let previousNextName = nextName
+        storedGroups.removeAll { sameGroup($0, oldName) }
+        storedGroups.append(newName)
+        for index in sessions.indices where sameGroup(sessions[index].name, oldName) { sessions[index].name = newName }
+        if sameGroup(nextName, oldName) { nextName = newName }
+        if !save() {
+            storedGroups = previousGroups; sessions = previousSessions; nextName = previousNextName
+            throw groupError("Could not save the group. Try again.")
+        }
     }
     var commandDirectory: URL { archiveURL.deletingLastPathComponent().appendingPathComponent("commands", isDirectory: true) }
     func processCommands() {
         let urls = (try? FileManager.default.contentsOfDirectory(at: commandDirectory, includingPropertiesForKeys: nil)) ?? []
         for url in urls.filter({ $0.pathExtension == "json" }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            guard let data = try? Data(contentsOf: url), let command = try? JSONDecoder().decode(TrackerCommand.self, from: data), command.type == "renameSession", let i = sessions.firstIndex(where: { $0.id == command.id }) else { continue }
-            let name = command.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty && name.count <= 120 && name.rangeOfCharacter(from: .newlines) == nil else { continue }
-            let existing = groups().first { $0.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
-            let canonical = existing ?? name
-            if existing == nil { try? addGroup(canonical) }
-            sessions[i].name = canonical
-            if save() { try? FileManager.default.removeItem(at: url) }
+            guard let data = try? Data(contentsOf: url), let command = try? JSONDecoder().decode(TrackerCommand.self, from: data) else { continue }
+            var failure: String?
+            do {
+                switch command.type {
+                case "renameSession":
+                    guard let id = command.id, let i = sessions.firstIndex(where: { $0.id == id }) else { throw groupError("That session no longer exists.") }
+                    let name = try validatedGroupName(command.name)
+                    let canonical = groups().first { sameGroup($0, name) } ?? name
+                    try addGroup(canonical)
+                    let previous = sessions[i].name
+                    sessions[i].name = canonical
+                    if !save() { sessions[i].name = previous; throw groupError("Could not save the session. Try again.") }
+                case "addGroup":
+                    try addGroup(command.name)
+                case "renameGroup":
+                    guard let oldName = command.oldName else { throw groupError("Choose a group to rename.") }
+                    try renameGroup(oldName, to: command.name)
+                default:
+                    throw groupError("The tracker could not understand this request.")
+                }
+            } catch { failure = error.localizedDescription }
+            if command.response == true {
+                let responseURL = url.deletingPathExtension().appendingPathExtension("result")
+                let result = CommandResponse(ok: failure == nil, error: failure)
+                guard let responseData = try? JSONEncoder().encode(result), (try? responseData.write(to: responseURL, options: .atomic)) != nil else { continue }
+                try? FileManager.default.removeItem(at: url)
+            } else if failure == nil {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
     }
     func focus(in day: Date, now: Date = Date()) -> TimeInterval {
@@ -151,6 +225,41 @@ final class Store: ObservableObject {
             let sessionEnd = session.actualEnd ?? min(now, session.plannedEnd)
             return total + max(0, min(end, sessionEnd).timeIntervalSince(max(start, session.start)))
         }
+    }
+}
+struct GroupEditorRequest: Identifiable {
+    let id = UUID()
+    let original: String?
+}
+struct GroupEditor: View {
+    @ObservedObject var store: Store
+    let original: String?
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var error: String?
+    init(store: Store, original: String?) {
+        self.store = store
+        self.original = original
+        _name = State(initialValue: original ?? "")
+    }
+    private func save() {
+        do {
+            if let original { try store.renameGroup(original, to: name) }
+            else { try store.addGroup(name) }
+            dismiss()
+        } catch { self.error = error.localizedDescription }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(original == nil ? "New Group" : "Rename Group").font(.headline)
+            TextField("Subject or group", text: $name).onSubmit(save)
+            if let error { Text(error).font(.caption).foregroundColor(.red) }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save", action: save).keyboardShortcut(.defaultAction)
+            }
+        }.padding(20).frame(width: 360)
     }
 }
 struct Dashboard: View {
@@ -163,6 +272,8 @@ struct Dashboard: View {
         _showHistory = State(initialValue: isDemo && !previewTimer)
     }
     @State private var now = Date()
+    @State private var showGroups = false
+    @State private var groupEditor: GroupEditorRequest?
     let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     var remaining: TimeInterval? { store.sessions.first(where: { $0.actualEnd == nil }).map { max(0, $0.plannedEnd.timeIntervalSince(now)) } }
     var statusColor: Color {
@@ -175,17 +286,43 @@ struct Dashboard: View {
     }
     var days: [Date] { (0..<7).reversed().compactMap { Calendar.current.date(byAdding: .day, value: -$0, to: now) } }
     var groupTotals: [(name: String, seconds: TimeInterval)] {
-        var sums: [String: TimeInterval] = [:]
+        var sums: [(name: String, seconds: TimeInterval)] = []
         for session in store.sessions {
             let name = session.name.trimmingCharacters(in: .whitespacesAndNewlines)
             let key = name.isEmpty ? "Focus session" : name
-            sums[key, default: 0] += max(0, (session.actualEnd ?? min(now, session.plannedEnd)).timeIntervalSince(session.start))
+            let seconds = max(0, (session.actualEnd ?? min(now, session.plannedEnd)).timeIntervalSince(session.start))
+            if let index = sums.firstIndex(where: { sameGroup($0.name, key) }) { sums[index].seconds += seconds }
+            else { sums.append((name: key, seconds: seconds)) }
         }
-        return sums.map { (name: $0.key, seconds: $0.value) }.sorted { $0.seconds > $1.seconds }
+        return sums.sorted { $0.seconds > $1.seconds }
     }
     var body: some View {
         VStack(spacing: 16) {
-            if showHistory {
+            if showGroups {
+                HStack {
+                    Button("Back") { showGroups = false }
+                    Spacer()
+                    Text("Groups").font(.headline)
+                    Spacer()
+                    Button("New") { groupEditor = GroupEditorRequest(original: nil) }
+                }
+                if store.groups().isEmpty {
+                    Spacer(); Text("No groups yet").foregroundColor(.secondary); Spacer()
+                } else {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(store.groups(), id: \.self) { name in
+                                HStack {
+                                    Text(name)
+                                    Spacer()
+                                    Button("Rename") { groupEditor = GroupEditorRequest(original: name) }.controlSize(.small)
+                                }.padding(.vertical, 8)
+                                Divider()
+                            }
+                        }
+                    }
+                }
+            } else if showHistory {
                 HStack {
                     Button("Done") { showHistory = false }
                     Spacer()
@@ -211,7 +348,14 @@ struct Dashboard: View {
                         VStack(spacing: 0) {
                             HStack { Text("Subjects / Groups").fontWeight(.semibold); Spacer() }.padding(.vertical, 8)
                             ForEach(groupTotals, id: \.name) { group in
-                                HStack { Text(group.name); Spacer(); Text(durationText(group.seconds)).monospacedDigit().foregroundColor(.secondary) }.padding(.vertical, 5)
+                                HStack {
+                                    Text(group.name)
+                                    Spacer()
+                                    Text(durationText(group.seconds)).monospacedDigit().foregroundColor(.secondary)
+                                    if !sameGroup(group.name, "Focus session") {
+                                        Button("Rename") { groupEditor = GroupEditorRequest(original: group.name) }.controlSize(.small)
+                                    }
+                                }.padding(.vertical, 5)
                             }
                             Divider().padding(.vertical, 8)
                             HStack { Text("Sessions").fontWeight(.semibold); Spacer() }.padding(.vertical, 4)
@@ -247,11 +391,13 @@ struct Dashboard: View {
                 else if !store.running { Text("Start a block in SelfControl. You’ll be asked for a subject or group.").font(.callout).foregroundColor(.secondary).multilineTextAlignment(.center) }
                 HStack(spacing: 12) {
                     Button("Open SelfControl") { NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: NSHomeDirectory() + "/Applications/SelfControl.app"), configuration: NSWorkspace.OpenConfiguration()) }
+                    Button("Groups") { showGroups = true }
                     Button("View Statistics") { showHistory = true }
                 }.padding(.top, 4)
                 Spacer()
             }
         }.padding(22).frame(minWidth: 430, minHeight: 250).onReceive(clock) { now = $0 }
+        .sheet(item: $groupEditor) { request in GroupEditor(store: store, original: request.original) }
     }
 }
 final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -391,6 +537,56 @@ if CommandLine.arguments.contains("--self-test") {
     restored.processCommands()
     precondition(restored.sessions[0].name == "Calculus" && !FileManager.default.fileExists(atPath: commandPath.path))
     precondition(Store(path: nil, archiveURL: path, startTimer: false).sessions[0].name == "Calculus")
+    let sessionID = restored.sessions[0].id
+    let sessionEnd = restored.sessions[0].actualEnd
+    try! restored.renameGroup("calculus", to: "Mathematics")
+    precondition(restored.sessions[0].name == "Mathematics" && restored.sessions[0].id == sessionID && restored.sessions[0].actualEnd == sessionEnd)
+    precondition(!restored.groups().contains(where: { sameGroup($0, "Calculus") }))
+    try! restored.addGroup("Physics")
+    try! restored.renameGroup("Physics", to: "Physics II")
+    precondition(Store(path: nil, archiveURL: path, startTimer: false).groups().contains("Physics II"))
+    let beforeConflict = try! Data(contentsOf: path)
+    do { try restored.renameGroup("Mathematics", to: "Physics II"); preconditionFailure("Group collision must be rejected") }
+    catch { precondition((try! Data(contentsOf: path)) == beforeConflict) }
+    try! restored.renameGroup("Mathematics", to: "MATHEMATICS")
+    precondition(restored.sessions[0].name == "MATHEMATICS")
+    try! FileManager.default.createDirectory(at: restored.groupDirectory, withIntermediateDirectories: true)
+    let legacy = restored.groupDirectory.appendingPathComponent("legacy.json")
+    try! JSONEncoder().encode("Essay").write(to: legacy)
+    restored.importLegacyGroups()
+    precondition(restored.groups().contains("Essay"))
+    try! restored.renameGroup("Essay", to: "Writing")
+    let migrated = Store(path: nil, archiveURL: path, startTimer: false)
+    precondition(migrated.groups().contains("Writing") && !migrated.groups().contains("Essay"))
+    let renameRequest = migrated.commandDirectory.appendingPathComponent("group-test.json")
+    let renameData = try! JSONSerialization.data(withJSONObject: ["type": "renameGroup", "oldName": "MATHEMATICS", "name": "Algebra", "response": true])
+    try! renameData.write(to: renameRequest)
+    migrated.processCommands()
+    let responseURL = migrated.commandDirectory.appendingPathComponent("group-test.result")
+    let response = try! JSONSerialization.jsonObject(with: Data(contentsOf: responseURL)) as! [String: Any]
+    precondition(response["ok"] as? Bool == true && migrated.sessions[0].name == "Algebra")
+    precondition(!FileManager.default.fileExists(atPath: renameRequest.path))
+    let conflictRequest = migrated.commandDirectory.appendingPathComponent("conflict-test.json")
+    let conflictData = try! JSONSerialization.data(withJSONObject: ["type": "renameGroup", "oldName": "Algebra", "name": "Physics II", "response": true])
+    try! conflictData.write(to: conflictRequest)
+    migrated.processCommands()
+    let conflictResponseURL = migrated.commandDirectory.appendingPathComponent("conflict-test.result")
+    let conflictResponse = try! JSONSerialization.jsonObject(with: Data(contentsOf: conflictResponseURL)) as! [String: Any]
+    precondition(conflictResponse["ok"] as? Bool == false && migrated.sessions[0].name == "Algebra")
+    precondition(Store(path: nil, archiveURL: path, startTimer: false).sessions[0].name == "Algebra")
+    let oldDirectory = path.deletingLastPathComponent().appendingPathComponent("old-format")
+    try! FileManager.default.createDirectory(at: oldDirectory.appendingPathComponent("groups"), withIntermediateDirectories: true)
+    let oldArchiveURL = oldDirectory.appendingPathComponent("sessions.json")
+    let oldSession = Session(name: "Old subject", start: start, plannedEnd: end, actualEnd: end)
+    try! JSONEncoder().encode(Archive(sessions: [oldSession], nextName: "")).write(to: oldArchiveURL)
+    let oldGroupFile = oldDirectory.appendingPathComponent("groups/unassigned.json")
+    try! JSONEncoder().encode("Unassigned").write(to: oldGroupFile)
+    let oldStore = Store(path: nil, archiveURL: oldArchiveURL, startTimer: false)
+    precondition(oldStore.sessions.count == 1 && oldStore.sessions[0].id == oldSession.id && oldStore.groups().contains("Unassigned"))
+    precondition(FileManager.default.fileExists(atPath: oldGroupFile.path))
+    try! oldStore.renameGroup("Unassigned", to: "New name")
+    let oldReload = Store(path: nil, archiveURL: oldArchiveURL, startTimer: false)
+    precondition(oldReload.groups().contains("New name") && !oldReload.groups().contains("Unassigned") && oldReload.sessions[0].id == oldSession.id)
     let corruptPath = path.deletingLastPathComponent().appendingPathComponent("corrupt.json")
     try! Data("not a valid archive".utf8).write(to: corruptPath)
     let corruptStore = Store(path: nil, archiveURL: corruptPath, startTimer: false)

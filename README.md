@@ -4,7 +4,7 @@ A macOS companion for [SelfControl](https://selfcontrolapp.com/) with an optiona
 
 ## Use
 
-Start a block in SelfControl, then name its subject when prompted. Click the SelfControl icon in the menu bar and choose View Statistics to see your weekly chart and history. You can also use SelfControl Tracker in Raycast to view statistics, rename sessions, or create groups.
+Start a block in SelfControl, then name its subject when prompted. Click the SelfControl icon in the menu bar and choose View Statistics to see your weekly chart and history. Use Groups in the popup or Raycast to create or rename groups; renaming updates their sessions. Raycast can also rename individual sessions.
 
 The status dot is green above five minutes, amber in the last five, and red in the last minute. The helper starts at login, has no Dock icon, and keeps tracking after you close the windows.
 

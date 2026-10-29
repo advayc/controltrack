@@ -1,21 +1,31 @@
 import { Action, ActionPanel, Form, Icon, List, showToast, Toast, useNavigation } from "@raycast/api";
 import { useCallback, useEffect, useState } from "react";
-import { addGroup, groups } from "./lib/storage";
+import { addGroup, groups, renameGroup } from "./lib/storage";
 
-function CreateGroup({ onSaved }: { onSaved: () => void }) {
+export function GroupForm({ original, onSaved }: { original?: string; onSaved: () => void }) {
   const { pop } = useNavigation();
   async function submit(values: { name: string }) {
+    const toast = await showToast({ style: Toast.Style.Animated, title: original ? "Renaming group" : "Creating group" });
     try {
-      const result = await addGroup(values.name);
-      await showToast({ style: Toast.Style.Success, title: result.existing ? "Group already exists" : "Group created", message: result.name });
+      if (original) {
+        await renameGroup(original, values.name);
+        toast.title = "Group renamed";
+      } else {
+        const result = await addGroup(values.name);
+        toast.title = result.existing ? "Group already exists" : "Group created";
+        toast.message = result.name;
+      }
+      toast.style = Toast.Style.Success;
       onSaved(); pop();
     } catch (error) {
-      await showToast({ style: Toast.Style.Failure, title: "Could not create group", message: error instanceof Error ? error.message : undefined });
+      toast.style = Toast.Style.Failure;
+      toast.title = original ? "Could not rename group" : "Could not create group";
+      toast.message = error instanceof Error ? error.message : undefined;
     }
   }
-  return <Form actions={<ActionPanel><Action.SubmitForm title="Save Group" onSubmit={submit} /></ActionPanel>}>
-    <Form.TextField id="name" title="Subject / Group" placeholder="e.g. Mathematics" />
-    <Form.Description text="This group will be offered when you start a SelfControl block." />
+  return <Form actions={<ActionPanel><Action.SubmitForm title={original ? "Save Group Name" : "Save Group"} onSubmit={submit} /></ActionPanel>}>
+    <Form.TextField id="name" title="Subject / Group" defaultValue={original} placeholder="e.g. Mathematics" />
+    <Form.Description text={original ? "Renaming a group also updates its existing sessions." : "This group will be offered when you start a SelfControl block."} />
   </Form>;
 }
 
@@ -30,10 +40,10 @@ export default function Groups() {
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
   return <List isLoading={isLoading} searchBarPlaceholder="Search subjects or groups">
-    <List.Item icon={Icon.Plus} title="Create Group" actions={<ActionPanel><Action.Push title="Create Group" target={<CreateGroup onSaved={refresh} />} /></ActionPanel>} />
+    <List.Item icon={Icon.Plus} title="Create Group" actions={<ActionPanel><Action.Push title="Create Group" target={<GroupForm onSaved={refresh} />} /></ActionPanel>} />
     {error && <List.Item icon={Icon.ExclamationMark} title="Could not read groups" subtitle={error} actions={<ActionPanel><Action title="Retry" onAction={refresh} /></ActionPanel>} />}
     {names.length > 0 && <List.Section title="Subjects / Groups">
-      {names.map((name) => <List.Item key={name} icon={Icon.Folder} title={name} subtitle="Available when starting a block" actions={<ActionPanel><Action.Push title="Create Group" target={<CreateGroup onSaved={refresh} />} /></ActionPanel>} />)}
+      {names.map((name) => <List.Item key={name} icon={Icon.Folder} title={name} subtitle="Available when starting a block" actions={<ActionPanel><Action.Push title="Rename Group" target={<GroupForm original={name} onSaved={refresh} />} /><Action.Push title="Create Group" target={<GroupForm onSaved={refresh} />} /></ActionPanel>} />)}
     </List.Section>}
   </List>;
 }
