@@ -11,8 +11,9 @@ mkdir -p "$data_dir" "$agent_dir"
 stage_dir="$(mktemp -d "$data_dir/.helper-build.XXXXXX")"
 trap 'rm -rf "$stage_dir"' EXIT
 staged_app="$stage_dir/SelfControl Tracker Helper.app"
-mkdir -p "$staged_app/Contents/MacOS"
+mkdir -p "$staged_app/Contents/MacOS" "$staged_app/Contents/Resources"
 cp "$project_dir/helper/Info.plist" "$staged_app/Contents/Info.plist"
+cp "$project_dir/helper/SelfControlIcon.icns" "$staged_app/Contents/Resources/SelfControlIcon.icns"
 swiftc -target "$(uname -m)-apple-macosx13.0" -O "$project_dir/helper/main.swift" -o "$staged_app/Contents/MacOS/SelfControl Tracker Helper" -framework SwiftUI -framework AppKit -framework IOKit
 "$staged_app/Contents/MacOS/SelfControl Tracker Helper" --self-test
 xattr -d com.apple.FinderInfo "$staged_app" 2>/dev/null || true
