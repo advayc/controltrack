@@ -602,6 +602,15 @@ struct Dashboard: View {
                         .foregroundColor(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
+                    if let session = store.sessions.first(where: { $0.actualEnd == nil }) {
+                        let name = session.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !name.isEmpty && !sameGroup(name, "Focus session") {
+                            HStack(spacing: 6) {
+                                Circle().fill(store.displayColor(name)).frame(width: 8, height: 8)
+                                Text(name).lineLimit(1)
+                            }.font(.callout).foregroundColor(.secondary)
+                        }
+                    }
                 }
                 if let error = store.readError { Text(error).font(.caption).foregroundColor(.red) }
                 else if !store.running { Text("Start a block in SelfControl. You’ll be asked for a subject or group.").font(.callout).foregroundColor(.secondary).multilineTextAlignment(.center) }
