@@ -54,6 +54,13 @@ func durationText(_ seconds: TimeInterval) -> String {
     let mins = max(0, Int(seconds / 60)); let h = mins / 60; let m = mins % 60
     return h > 0 ? "\(h)h \(m)m" : "\(m)m"
 }
+func sessionTimeText(_ session: Session) -> String {
+    let start = session.start.formatted(date: .abbreviated, time: .shortened)
+    let prefix = session.estimatedStart ? "Approx. " : ""
+    guard let end = session.actualEnd else { return prefix + start + " · In progress" }
+    let endText = end.formatted(date: Calendar.current.isDate(session.start, inSameDayAs: end) ? .omitted : .abbreviated, time: .shortened)
+    return prefix + start + " – " + endText
+}
 func countdownText(_ seconds: TimeInterval) -> String {
     let total = max(0, Int(ceil(seconds)))
     let hours = total / 3600, minutes = (total % 3600) / 60, remainder = total % 60
@@ -567,7 +574,7 @@ struct Dashboard: View {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 3) {
                                         TextField("Subject or group", text: Binding(get: { store.sessions.first(where: { $0.id == s.id })?.name ?? "" }, set: { store.rename(s.id, $0) })).textFieldStyle(.plain).fontWeight(.medium)
-                                        Text(s.start.formatted(date: .abbreviated, time: .shortened) + (s.actualEnd == nil ? " · In progress" : "")).font(.caption).foregroundColor(.secondary)
+                                        Text(sessionTimeText(s)).font(.caption).foregroundColor(.secondary)
                                     }
                                     Spacer()
                                     Text(durationText((s.actualEnd ?? min(now, s.plannedEnd)).timeIntervalSince(s.start))).monospacedDigit().foregroundColor(.secondary)
