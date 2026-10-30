@@ -591,9 +591,11 @@ struct Dashboard: View {
                 }
             } else {
                 Spacer()
-                HStack(spacing: 6) {
-                    Circle().fill(statusColor).frame(width: 7, height: 7)
-                    Text(store.running ? "Block in progress" : "Ready for your next block")
+                if !store.running {
+                    HStack(spacing: 6) {
+                        Circle().fill(statusColor).frame(width: 7, height: 7)
+                        Text("Ready for your next block")
+                    }
                 }
                 if store.running && remaining != nil {
                     Text(remainingText)
