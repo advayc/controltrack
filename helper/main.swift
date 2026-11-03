@@ -671,7 +671,7 @@ struct Dashboard: View {
                 }.padding(.top, 4)
                 Spacer()
             }
-        }.padding(16).frame(minWidth: 360, minHeight: 220).onReceive(clock) { now = $0 }
+        }.padding(16).frame(minWidth: 360, maxWidth: .infinity, minHeight: 220, maxHeight: .infinity).onReceive(clock) { now = $0 }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("SelfControlTrackerSessionStarted"))) { _ in
             showHistory = false
             showGroups = false
@@ -719,7 +719,10 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: isDemo && !previewTimer ? 440 : 330), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "SelfControl Tracker"; window.center(); window.delegate = self; window.isReleasedWhenClosed = false
         if isDemo { window.appearance = NSAppearance(named: .darkAqua) }
-        window.contentView = NSHostingView(rootView: Dashboard(store: store, isDemo: isDemo, previewTimer: previewTimer))
+        let hostingView = NSHostingView(rootView: Dashboard(store: store, isDemo: isDemo, previewTimer: previewTimer))
+        hostingView.sizingOptions = []
+        window.contentMinSize = NSSize(width: 360, height: 220)
+        window.contentView = hostingView
         if !isDemo {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             item.autosaveName = NSStatusItem.AutosaveName("SelfControlTracker")
