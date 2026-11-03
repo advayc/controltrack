@@ -76,6 +76,7 @@ final class Store: ObservableObject {
     @Published var status = "Connecting to SelfControl…"
     @Published var running = false
     @Published var readError: String? = nil
+    @Published var startingBlock = false
     private var timer: Timer?
     private var archiveHealthy = true
     var onSessionStarted: ((UUID) -> Void)?
@@ -107,6 +108,45 @@ final class Store: ObservableObject {
         let monitor = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
         RunLoop.main.add(monitor, forMode: .common)
         timer = monitor
+    }
+    func startBlock(minutes: Int) {
+        guard !startingBlock && !running else { return }
+        let cli = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/SelfControl.app/Contents/MacOS/selfcontrol-cli")
+        guard FileManager.default.isExecutableFile(atPath: cli.path) else { readError = "SelfControl could not be found."; return }
+        let defaults = UserDefaults(suiteName: "org.eyebeam.SelfControl")
+        let hosts = defaults?.stringArray(forKey: "Blocklist") ?? []
+        let allowlist = defaults?.bool(forKey: "BlockAsWhitelist") ?? false
+        guard !hosts.isEmpty || allowlist else { readError = "Add websites to your SelfControl blocklist first."; return }
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".selfcontrol")
+        do {
+            let data = try PropertyListSerialization.data(fromPropertyList: ["HostBlacklist": hosts, "BlockAsWhitelist": allowlist], format: .binary, options: 0)
+            try data.write(to: temp, options: .atomic)
+            let settingKeys = ["ClearCaches", "AllowLocalNetworks", "EvaluateCommonSubdomains", "IncludeLinkedDomains", "BlockSoundShouldPlay", "BlockSound", "EnableErrorReporting"]
+            var settings: [String: Any] = [:]
+            for key in settingKeys { if let value = defaults?.object(forKey: key) { settings[key] = value } }
+            let settingsJSON = String(data: try JSONSerialization.data(withJSONObject: settings), encoding: .utf8) ?? "{}"
+            let process = Process()
+            process.executableURL = cli
+            process.arguments = ["start", "--blocklist", temp.path, "--enddate", ISO8601DateFormatter().string(from: Date().addingTimeInterval(Double(minutes * 60))), "--settings", settingsJSON]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            process.terminationHandler = { [weak self] process in
+                try? FileManager.default.removeItem(at: temp)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.startingBlock = false
+                    self.poll()
+                    if process.terminationStatus != 0 { self.readError = "Could not start the block. Check SelfControl and try again." }
+                }
+            }
+            startingBlock = true
+            readError = nil
+            try process.run()
+        } catch {
+            startingBlock = false
+            try? FileManager.default.removeItem(at: temp)
+            readError = "Could not start SelfControl: \(error.localizedDescription)"
+        }
     }
     @discardableResult func save() -> Bool {
         guard archiveHealthy else { return false }
@@ -460,6 +500,7 @@ struct Dashboard: View {
     @State private var inspectedDay: Date?
     @State private var inspectedGroup: String?
     @State private var hoveredSessionGroup: String?
+    @State private var blockMinutes: Double = 35
     let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     var remaining: TimeInterval? { store.sessions.first(where: { $0.actualEnd == nil }).map { max(0, $0.plannedEnd.timeIntervalSince(now)) } }
     var statusColor: Color {
@@ -596,6 +637,10 @@ struct Dashboard: View {
                         Circle().fill(statusColor).frame(width: 7, height: 7)
                         Text("Ready for your next block")
                     }
+                    Text("\(Int(blockMinutes)) minutes").font(.callout).monospacedDigit()
+                    Slider(value: $blockMinutes, in: 5...240, step: 5).frame(maxWidth: 300).disabled(store.startingBlock)
+                    Button(store.startingBlock ? "Starting…" : "Start Block") { store.startBlock(minutes: Int(blockMinutes)) }
+                        .disabled(store.startingBlock).keyboardShortcut(.defaultAction)
                 }
                 if store.running && remaining != nil {
                     if let session = store.sessions.first(where: { $0.actualEnd == nil }) {
@@ -615,7 +660,7 @@ struct Dashboard: View {
                         .minimumScaleFactor(0.6)
                 }
                 if let error = store.readError { Text(error).font(.caption).foregroundColor(.red) }
-                else if !store.running { Text("Start a block in SelfControl. You’ll be asked for a subject or group.").font(.callout).foregroundColor(.secondary).multilineTextAlignment(.center) }
+                else if !store.running { Text("Uses your SelfControl blocklist. You’ll be asked for a subject.").font(.callout).foregroundColor(.secondary).multilineTextAlignment(.center) }
                 HStack(spacing: 12) {
                     Button("Open SelfControl") { NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: NSHomeDirectory() + "/Applications/SelfControl.app"), configuration: NSWorkspace.OpenConfiguration()) }
                     Button("Groups") { showGroups = true }
