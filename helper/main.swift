@@ -637,7 +637,7 @@ struct Dashboard: View {
                         Circle().fill(statusColor).frame(width: 7, height: 7)
                         Text("Ready for your next block")
                     }
-                    Text("\(Int(blockMinutes)) minutes").font(.callout).monospacedDigit()
+                    Text(Int(blockMinutes) >= 60 ? durationText(blockMinutes * 60) : "\(Int(blockMinutes)) minutes").font(.callout).monospacedDigit()
                     Slider(value: $blockMinutes, in: 5...240, step: 5).frame(maxWidth: 300).disabled(store.startingBlock)
                     Button(store.startingBlock ? "Starting…" : "Start Block") { store.startBlock(minutes: Int(blockMinutes)) }
                         .disabled(store.startingBlock).keyboardShortcut(.defaultAction)
