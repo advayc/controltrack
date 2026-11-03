@@ -660,7 +660,6 @@ struct Dashboard: View {
                         .minimumScaleFactor(0.6)
                 }
                 if let error = store.readError { Text(error).font(.caption).foregroundColor(.red) }
-                else if !store.running { Text("Uses your SelfControl blocklist. You’ll be asked for a subject.").font(.callout).foregroundColor(.secondary).multilineTextAlignment(.center) }
                 HStack(spacing: 12) {
                     Button("Open SelfControl") { NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: NSHomeDirectory() + "/Applications/SelfControl.app"), configuration: NSWorkspace.OpenConfiguration()) }
                     Button("Groups") { showGroups = true }
@@ -672,7 +671,7 @@ struct Dashboard: View {
                 }.padding(.top, 4)
                 Spacer()
             }
-        }.padding(22).frame(minWidth: 430, minHeight: 250).onReceive(clock) { now = $0 }
+        }.padding(16).frame(minWidth: 360, minHeight: 220).onReceive(clock) { now = $0 }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("SelfControlTrackerSessionStarted"))) { _ in
             showHistory = false
             showGroups = false
