@@ -190,7 +190,25 @@ final class Store: ObservableObject {
             }
         }
     }
-    func rename(_ id: UUID, _ value: String) { if let i = sessions.firstIndex(where: { $0.id == id }) { sessions[i].name = value; save() } }
+    func setSessionGroup(_ id: UUID, to input: String) throws {
+        guard let index = sessions.firstIndex(where: { $0.id == id }) else { throw groupError("That session no longer exists.") }
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = sameGroup(trimmed, "Focus session") ? "Focus session" : try validatedGroupName(trimmed)
+        let canonical = groups().first { sameGroup($0, name) } ?? name
+        let previousSessions = sessions
+        let previousGroups = storedGroups
+        // Keep groups that were previously represented only by this session.
+        storedGroups = groups()
+        if !sameGroup(canonical, "Focus session"), !storedGroups.contains(where: { sameGroup($0, canonical) }) {
+            storedGroups.append(canonical)
+        }
+        sessions[index].name = canonical
+        if !save() {
+            sessions = previousSessions
+            storedGroups = previousGroups
+            throw groupError("Could not save the session. Try again.")
+        }
+    }
     var groupDirectory: URL { archiveURL.deletingLastPathComponent().appendingPathComponent("groups", isDirectory: true) }
     func importLegacyGroups() {
         let urls = (try? FileManager.default.contentsOfDirectory(at: groupDirectory, includingPropertiesForKeys: nil)) ?? []
@@ -292,13 +310,8 @@ final class Store: ObservableObject {
             do {
                 switch command.type {
                 case "renameSession":
-                    guard let id = command.id, let i = sessions.firstIndex(where: { $0.id == id }) else { throw groupError("That session no longer exists.") }
-                    let name = try validatedGroupName(command.name)
-                    let canonical = groups().first { sameGroup($0, name) } ?? name
-                    try addGroup(canonical)
-                    let previous = sessions[i].name
-                    sessions[i].name = canonical
-                    if !save() { sessions[i].name = previous; throw groupError("Could not save the session. Try again.") }
+                    guard let id = command.id else { throw groupError("That session no longer exists.") }
+                    try setSessionGroup(id, to: command.name)
                 case "setGroupColor":
                     guard let color = command.colorIndex, groups().contains(where: { sameGroup($0, command.name) }) else { throw groupError("That group no longer exists.") }
                     try setColor(command.name, index: color)
@@ -483,6 +496,89 @@ struct GroupEditor: View {
         .onAppear { NSColorPanel.shared.attachColorList(presetColorList) }
     }
 }
+struct SessionGroupEditor: View {
+    @ObservedObject var store: Store
+    let session: Session
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedGroup: String
+    @State private var newGroup = ""
+    @State private var error: String?
+    @FocusState private var newGroupFocused: Bool
+
+    init(store: Store, session: Session) {
+        self.store = store
+        self.session = session
+        let current = store.groups().first { sameGroup($0, session.name) } ?? "Focus session"
+        _selectedGroup = State(initialValue: current)
+    }
+
+    private func save() {
+        do {
+            try store.setSessionGroup(session.id, to: selectedGroup.isEmpty ? newGroup : selectedGroup)
+            dismiss()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Edit Session").font(.headline)
+            Text(sessionTimeText(session)).font(.caption).foregroundColor(.secondary)
+            Picker("Group", selection: $selectedGroup) {
+                Text("No group").tag("Focus session")
+                ForEach(store.groups(), id: \.self) { name in Text(name).tag(name) }
+                Divider()
+                Text("New group…").tag("")
+            }
+            .onChange(of: selectedGroup) { value in
+                error = nil
+                newGroupFocused = value.isEmpty
+            }
+            if selectedGroup.isEmpty {
+                TextField("New group name", text: $newGroup)
+                    .focused($newGroupFocused)
+                    .onSubmit(save)
+            }
+            if let error { Text(error).font(.caption).foregroundColor(.red).fixedSize(horizontal: false, vertical: true) }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save", action: save)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(selectedGroup.isEmpty && newGroup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }.padding(16).frame(width: 300)
+    }
+}
+struct SessionGroupButton: View {
+    @ObservedObject var store: Store
+    let session: Session
+    @State private var isEditing = false
+
+    var body: some View {
+        GroupIconButton(symbol: "pencil", label: "Change this session’s group") { isEditing = true }
+        .accessibilityLabel("Edit group for \(session.name), \(sessionTimeText(session))")
+        .accessibilityIdentifier("edit-session-\(session.id.uuidString)")
+        .popover(isPresented: $isEditing) { SessionGroupEditor(store: store, session: session) }
+    }
+}
+private let dashboardBackground = NSColor(name: nil) { appearance in
+    if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+        return NSColor(calibratedWhite: 0.14, alpha: 1)
+    }
+    return NSColor(calibratedWhite: 0.96, alpha: 1)
+}
+
+private struct DashboardButtonHover: ViewModifier {
+    @State private var hovered = false
+    func body(content: Content) -> some View {
+        content
+            .tint(hovered ? .accentColor : nil)
+            .scaleEffect(hovered ? 1.03 : 1)
+            .animation(.easeOut(duration: 0.15), value: hovered)
+            .onHover { hovered = $0 }
+    }
+}
+
 struct Dashboard: View {
     @ObservedObject var store: Store
     let isDemo: Bool
@@ -496,7 +592,6 @@ struct Dashboard: View {
     @State private var showGroups = false
     @State private var groupEditor: GroupEditorRequest?
     @State private var sessionsExpanded = false
-    @State private var statisticsHovered = false
     @State private var inspectedDay: Date?
     @State private var inspectedGroup: String?
     @State private var hoveredSessionGroup: String?
@@ -614,11 +709,12 @@ struct Dashboard: View {
                             ForEach(store.sessions) { s in
                                 HStack {
                                     VStack(alignment: .leading, spacing: 3) {
-                                        TextField("Subject or group", text: Binding(get: { store.sessions.first(where: { $0.id == s.id })?.name ?? "" }, set: { store.rename(s.id, $0) })).textFieldStyle(.plain).fontWeight(.medium)
+                                        Text(s.name).fontWeight(.medium).lineLimit(1).help(s.name)
                                         Text(sessionTimeText(s)).font(.caption).foregroundColor(.secondary)
                                     }
                                     Spacer()
                                     Text(durationText((s.actualEnd ?? min(now, s.plannedEnd)).timeIntervalSince(s.start))).monospacedDigit().foregroundColor(.secondary)
+                                    SessionGroupButton(store: store, session: s)
                                 }.padding(.vertical, 8)
                                 .onHover { over in
                                     if over { hoveredSessionGroup = s.name }
@@ -645,12 +741,11 @@ struct Dashboard: View {
                 if store.running && remaining != nil {
                     if let session = store.sessions.first(where: { $0.actualEnd == nil }) {
                         let name = session.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !name.isEmpty && !sameGroup(name, "Focus session") {
-                            HStack(spacing: 6) {
-                                Circle().fill(store.displayColor(name)).frame(width: 8, height: 8)
-                                Text(name).lineLimit(1)
-                            }.font(.callout).foregroundColor(.secondary)
-                        }
+                        HStack(spacing: 6) {
+                            Circle().fill(sameGroup(name, "Focus session") ? Color.secondary : store.displayColor(name)).frame(width: 8, height: 8)
+                            Text(name.isEmpty || sameGroup(name, "Focus session") ? "No group" : name).lineLimit(1)
+                            SessionGroupButton(store: store, session: session)
+                        }.font(.callout).foregroundColor(.secondary)
                     }
                     Text(remainingText)
                         .font(.system(size: 42, weight: .regular))
@@ -662,16 +757,17 @@ struct Dashboard: View {
                 if let error = store.readError { Text(error).font(.caption).foregroundColor(.red) }
                 HStack(spacing: 12) {
                     Button("Open SelfControl") { NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: NSHomeDirectory() + "/Applications/SelfControl.app"), configuration: NSWorkspace.OpenConfiguration()) }
+                        .modifier(DashboardButtonHover())
                     Button("Groups") { showGroups = true }
+                        .modifier(DashboardButtonHover())
                     Button("View Statistics") { showHistory = true }
-                        .tint(statisticsHovered ? .accentColor : nil)
-                        .scaleEffect(statisticsHovered ? 1.03 : 1)
-                        .animation(.easeOut(duration: 0.15), value: statisticsHovered)
-                        .onHover { statisticsHovered = $0 }
+                        .modifier(DashboardButtonHover())
                 }.padding(.top, 4)
                 Spacer()
             }
-        }.padding(16).frame(minWidth: 360, maxWidth: .infinity, minHeight: 220, maxHeight: .infinity).onReceive(clock) { now = $0 }
+        }.padding(16).frame(minWidth: 360, maxWidth: .infinity, minHeight: 220, maxHeight: .infinity)
+        .background(Color(nsColor: dashboardBackground))
+        .onReceive(clock) { now = $0 }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("SelfControlTrackerSessionStarted"))) { _ in
             showHistory = false
             showGroups = false
@@ -718,11 +814,14 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: isDemo && !previewTimer ? 440 : 330), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "SelfControl Tracker"; window.center(); window.delegate = self; window.isReleasedWhenClosed = false
+        window.backgroundColor = dashboardBackground
+        window.isOpaque = true
+        window.titlebarAppearsTransparent = true
         if isDemo { window.appearance = NSAppearance(named: .darkAqua) }
         let hostingView = NSHostingView(rootView: Dashboard(store: store, isDemo: isDemo, previewTimer: previewTimer))
         hostingView.sizingOptions = []
-        window.contentMinSize = NSSize(width: 360, height: 220)
         window.contentView = hostingView
+        window.contentMinSize = NSSize(width: 360, height: 220)
         if !isDemo {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             item.autosaveName = NSStatusItem.AutosaveName("SelfControlTracker")
@@ -779,10 +878,8 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if alert.runModal() == .alertFirstButtonReturn {
             let name = box.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if !name.isEmpty {
-                let existing = names.first { $0.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
-                let canonical = existing ?? name
-                if existing == nil { try? store.addGroup(canonical) }
-                store.rename(id, canonical)
+                do { try store.setSessionGroup(id, to: name) }
+                catch { NSAlert(error: error).runModal() }
             }
         }
     }
@@ -882,6 +979,47 @@ if CommandLine.arguments.contains("--self-test") {
     let splitStart = Calendar.current.date(byAdding: .hour, value: 12, to: Calendar.current.startOfDay(for: start))!
     splitStore.sessions = [Session(name: "Study A", start: splitStart, plannedEnd: splitStart.addingTimeInterval(1200), actualEnd: splitStart.addingTimeInterval(1200)), Session(name: "Study B", start: splitStart, plannedEnd: splitStart.addingTimeInterval(1800), actualEnd: splitStart.addingTimeInterval(1800))]
     precondition(splitStore.focus(group: "Study A", in: splitStart) == 1200 && splitStore.focus(group: "Study B", in: splitStart) == 1800)
+    let completed = splitStore.sessions[0]
+    let dailyTotal = splitStore.focus(in: splitStart)
+    splitStore.groupColors = ["Study A": 2, "Study B": 1]
+    splitStore.customColors = ["Study B": "123456"]
+    splitStore.nextName = "Next session"
+    try! splitStore.setSessionGroup(completed.id, to: "  study b  ")
+    precondition(splitStore.sessions[0].name == "Study B")
+    precondition(splitStore.sessions[0].id == completed.id && splitStore.sessions[0].start == completed.start && splitStore.sessions[0].plannedEnd == completed.plannedEnd && splitStore.sessions[0].actualEnd == completed.actualEnd && splitStore.sessions[0].estimatedStart == completed.estimatedStart)
+    let otherSession = splitStore.sessions[1]
+    precondition(otherSession.id != completed.id && otherSession.name == "Study B" && otherSession.start == splitStart && otherSession.actualEnd == splitStart.addingTimeInterval(1800))
+    precondition(splitStore.focus(group: "Study A", in: splitStart) == 0 && splitStore.focus(group: "Study B", in: splitStart) == 3000 && splitStore.focus(in: splitStart) == dailyTotal)
+    precondition(splitStore.groups().contains("Study A") && splitStore.groupColors["Study A"] == 2 && splitStore.customColors["Study B"] == "123456" && splitStore.nextName == "Next session")
+    let editedReload = Store(path: nil, archiveURL: splitStore.archiveURL, startTimer: false)
+    precondition(editedReload.sessions[0].name == "Study B" && editedReload.sessions[0].id == completed.id && editedReload.groups().contains("Study A"))
+    let beforeInvalidEdit = try! Data(contentsOf: splitStore.archiveURL)
+    for invalid in ["", "\n", "Invalid\nGroup", String(repeating: "A", count: 121)] {
+        do { try splitStore.setSessionGroup(completed.id, to: invalid); preconditionFailure("Invalid session groups must be rejected") }
+        catch { precondition((try! Data(contentsOf: splitStore.archiveURL)) == beforeInvalidEdit && splitStore.sessions[0].name == "Study B") }
+    }
+    do { try splitStore.setSessionGroup(UUID(), to: "Missing"); preconditionFailure("Missing sessions must be rejected") }
+    catch { precondition((try! Data(contentsOf: splitStore.archiveURL)) == beforeInvalidEdit && !splitStore.groups().contains("Missing")) }
+    try! splitStore.setSessionGroup(completed.id, to: "Focus session")
+    precondition(splitStore.sessions[0].name == "Focus session" && splitStore.focus(group: "Focus session", in: splitStart) == 1200)
+    try! splitStore.setSessionGroup(completed.id, to: "New subject")
+    precondition(splitStore.sessions[0].name == "New subject" && splitStore.groups().contains("New subject"))
+    let active = Session(name: "Study A", start: splitStart, plannedEnd: splitStart.addingTimeInterval(3600), estimatedStart: true)
+    splitStore.sessions.append(active)
+    splitStore.running = true
+    try! splitStore.setSessionGroup(active.id, to: "Study B")
+    precondition(splitStore.sessions.last?.id == active.id && splitStore.sessions.last?.name == "Study B" && splitStore.sessions.last?.actualEnd == nil && splitStore.sessions.last?.plannedEnd == active.plannedEnd && splitStore.sessions.last?.estimatedStart == true && splitStore.running)
+    let blockerURL = path.deletingLastPathComponent().appendingPathComponent("write-failure")
+    let blockerData = Data("existing file".utf8)
+    try! blockerData.write(to: blockerURL)
+    let failingStore = Store(path: nil, archiveURL: blockerURL.appendingPathComponent("sessions.json"), startTimer: false)
+    failingStore.sessions = [completed]
+    failingStore.storedGroups = ["Study A"]
+    do { try failingStore.setSessionGroup(completed.id, to: "Unsaved group"); preconditionFailure("Failed writes must report an error") }
+    catch {
+        precondition(failingStore.sessions[0].name == completed.name && failingStore.sessions[0].id == completed.id && failingStore.storedGroups == ["Study A"])
+        precondition(!failingStore.groups().contains("Unsaved group") && (try! Data(contentsOf: blockerURL)) == blockerData)
+    }
     let corruptPath = path.deletingLastPathComponent().appendingPathComponent("corrupt.json")
     try! Data("not a valid archive".utf8).write(to: corruptPath)
     let corruptStore = Store(path: nil, archiveURL: corruptPath, startTimer: false)

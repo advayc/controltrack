@@ -8,6 +8,8 @@ Start a block from the tracker or SelfControl, then name its subject when prompt
 
 The status dot is green above five minutes, amber in the last five, and red in the last minute. The helper starts at login, restarts if it exits, and opens the popup for new blocks. It has no Dock icon. Hover over a chart segment for that group’s time, or over a session to darken its group in the chart. Use the pencil and trash icons to edit groups, and expand Sessions for individual records.
 
+To correct a session’s group, open View Statistics, expand Sessions, and click the pencil next to that session. Choose an existing group, New group, or No group, then click Save. While a block is running, use the pencil beside the current group on the timer screen. Changing a session’s group preserves its dates and duration and updates the chart and group totals. Cancel leaves the session unchanged. The window can be resized down to 360 by 220 points.
+
 ![Compact statistics window showing example study times across a week, with totals by subject](media/weekly-view.png)
 
 The chart shows fictional sessions in a resized popup.
