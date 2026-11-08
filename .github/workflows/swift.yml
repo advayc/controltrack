@@ -1,22 +1,23 @@
-# This workflow will build a Swift project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-swift
-
 name: Swift
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   build:
-
     runs-on: macos-latest
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: swift build -v
-    - name: Run tests
-      run: swift test -v
+      - uses: actions/checkout@v4
+      - name: Build helper
+        run: |
+          swiftc -target "$(uname -m)-apple-macosx13.0" -O helper/main.swift \
+            -o "$RUNNER_TEMP/controltrack-helper" \
+            -framework SwiftUI -framework AppKit -framework IOKit
+      - name: Run helper self-test
+        run: '"$RUNNER_TEMP/controltrack-helper" --self-test'
